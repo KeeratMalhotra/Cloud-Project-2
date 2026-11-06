@@ -20,7 +20,7 @@ every server:
 Neither rule is learned, so both are applied to the **same trained EdgePlus policy**. Every comparison uses
 identical policy weights and identical test episodes; only the server rules change.
 
-- Paper: [`paper/main.pdf`](paper/main.pdf) (28 pages, written for readers new to the field), source in
+- Paper: [`paper/main.pdf`](paper/main.pdf) (29 pages, written for readers new to the field), source in
   [`paper/main.tex`](paper/main.tex)
 - All numbers with confidence intervals: [`results/tables.md`](results/tables.md)
 
@@ -144,16 +144,24 @@ cd paper
 pdflatex main && bibtex main && pdflatex main && pdflatex main
 ```
 
-It also builds on Overleaf (upload the `paper/` folder) or with `tectonic main.tex`. Useful class options in the
-first line of `main.tex`:
+**Overleaf:** download [`paper-overleaf.zip`](paper-overleaf.zip) from the repository root, then in Overleaf
+choose *New Project → Upload Project* and select the zip. It contains `main.tex`, `refs.bib`, `sn-jnl.cls`,
+`sn-mathphys-num.bst` and `figures/`, and compiles with Overleaf's default pdfLaTeX compiler. If you change files
+in `paper/`, rebuild the zip with:
+
+```bash
+cd paper && rm -f ../paper-overleaf.zip && zip -r ../paper-overleaf.zip main.tex refs.bib sn-jnl.cls sn-mathphys-num.bst figures
+```
+
+It also builds with `tectonic main.tex`. Useful class options in the first line of `main.tex`:
 
 - `referee`: double line spacing for peer review
 - `lineno`: line numbers in the margin
 - `sn-mathphys-num` can be swapped for another style from the template's `bst/` folder (for example
   `sn-vancouver-num`) if the target journal asks for it; copy that `.bst` into `paper/` as well.
 
-Before submission, mark the corresponding author with `\author*[1]{...}\email{...}` and fill in the
-Declarations block, which is left commented out at the end of `main.tex`.
+Keerat Malhotra is marked as the corresponding author (`\author*`); move the `*` to change this. Before
+submission, fill in the Declarations block, which is left commented out at the end of `main.tex`.
 
 ## What is implemented
 
