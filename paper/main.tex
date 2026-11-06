@@ -1,419 +1,1154 @@
-\documentclass[conference]{IEEEtran}
-\usepackage{cite}
-\usepackage{amsmath,amssymb}
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\usepackage{enumitem}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
-\usepackage{url}
+\usepackage{cite}
+\usepackage{float}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\setlist{itemsep=2pt,topsep=4pt}
+\renewcommand{\arraystretch}{1.15}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\newtcolorbox{simplebox}[1][]{enhanced,breakable,colback=blue!4,colframe=blue!45!black,boxrule=0.6pt,arc=2pt,
+  left=6pt,right=6pt,top=4pt,bottom=4pt,fonttitle=\bfseries,title={#1}}
+\newtcolorbox{examplebox}[1][]{enhanced,breakable,colback=orange!5,colframe=orange!65!black,boxrule=0.6pt,arc=2pt,
+  left=6pt,right=6pt,top=4pt,bottom=4pt,fonttitle=\bfseries,title={#1}}
+
+\title{\textbf{Energy-Efficient Priority Scheduling for Task Allocation in 6G Edge Computing}\\[6pt]
+\large Deadline-aware queues and guarded CPU slow-down on top of the EdgePlus scheduler}
+\author{Keerat Malhotra\qquad Bhavya Maheshwari\qquad Bhumika Aswal\\[6pt]
+\normalsize Netaji Subhas University of Technology, New Delhi, India}
+\date{}
 
 \begin{document}
-
-\title{Deadline-First Queueing and Guarded DVFS for EdgePlus: Slack-Aware Server Rules for 6G Edge
-Task Allocation}
-
-% TODO(authors): fill in department, university, city and e-mail addresses.
-\author{\IEEEauthorblockN{Keerat Malhotra, Bhavya Maheshwari, Bhumika Aswal}
-\IEEEauthorblockA{Department, University\\
-City, Country\\
-email@example.com}}
-
 \maketitle
 
 \begin{abstract}
-EdgePlus is a feasibility-first multiagent reinforcement learning scheduler for 6G edge computing: a masked
-cooperative PPO policy chooses the server for every task. Once a task reaches its server, however, it waits in
-first-come-first-served order and runs at full CPU speed. We add two rules at each server. The first serves
-the waiting task with the earliest deadline, drops tasks that can no longer meet their deadline, and makes
-the feasibility mask estimate waits under the same order. The second lowers the CPU frequency only when no
-other task is waiting and caps the added service time. We reimplement EdgePlus (without its PSO outer loop)
-in a discrete-event simulator, train it with three seeds per load, and apply the rules to the same frozen
-policies. On the CityPulse workload used by EdgePlus at 150{,}000 tasks, on-time completion rises from
-80.5\% to 99.7\% and URLLC deadline misses fall from 55.4\% to 0.07\%. At 50{,}000 tasks, energy per task
-falls by 19.8\% while on-time completion stays at 100.0\%. On real bus-mounted sensor data from Delhi
-(AirDelhi), evaluated without retraining, on-time completion rises from 89.3\% to 98.8\% at 100{,}000 tasks
-and from 73.0\% to 96.5\% at 150{,}000 tasks. The cost is a longer overall 95th-percentile latency at high
-load (148\,s to 298\,s on CityPulse), because tasks with 120--600\,s deadlines are deliberately served later.
-Ablations show that each partial rule set performs worse than the combination.
+\noindent Edge computing places small servers close to the devices that use them, so that results come back
+quickly. In a 6G smart city these servers receive a constant stream of tasks from sensors, and the tasks have
+very different deadlines: an air-pollution alert may need an answer within seconds, while a logging job can wait
+ten minutes. EdgePlus, a recent scheduler published in the \emph{IEEE Internet of Things Journal}, uses
+reinforcement learning to decide which server each task should go to. Once a task reaches a server, however,
+EdgePlus treats all tasks alike: they wait in arrival order and run at full CPU speed.
+
+We add two simple rules inside every server. The first is a form of priority scheduling: the server always runs
+the waiting task whose deadline is closest, and it drops a task as soon as that task can no longer finish in
+time. The second saves energy: when nothing else is waiting, the server lowers its CPU speed for a task that has
+time to spare, but never by more than 1.5 seconds of extra running time. We rebuilt EdgePlus in a simulator,
+trained it, and tested the same trained model with and without our rules on two datasets: the CityPulse data
+used by EdgePlus, and real sensor data collected on public buses in Delhi (AirDelhi).
+
+At the heaviest load we tested (150{,}000 tasks in ten minutes), the share of tasks finished on time rises from
+80.5\% to 99.7\% on CityPulse and from 73.0\% to 96.5\% on AirDelhi, and missed urgent tasks fall from 55.4\% to
+0.07\% on CityPulse. At light load, energy per task falls by 19.8\% while every task still finishes on time. The
+price is that relaxed tasks wait longer: the overall 95th-percentile latency at heavy load rises from 148\,s to
+298\,s on CityPulse, although those tasks still meet their own deadlines. The paper explains each idea from first
+principles, with worked examples, so that readers who are new to the field can follow it.
+
+\medskip
+\noindent\textbf{Keywords:} 6G, edge computing, task allocation, priority scheduling, earliest deadline first,
+energy efficiency, DVFS, reinforcement learning.
 \end{abstract}
 
-\begin{IEEEkeywords}
-6G edge computing, task scheduling, earliest deadline first, DVFS, multiagent reinforcement learning,
-energy efficiency
-\end{IEEEkeywords}
+\tableofcontents
+\newpage
 
+%=====================================================================================================
 \section{Introduction}
-Edge servers in a 6G smart city must finish sensor-driven tasks before deadlines that differ by two orders of
-magnitude: an air-quality alert may have a few seconds, while a logging task may have ten minutes. EdgePlus
-\cite{edgeplus2026} addresses this with a feasibility-first design. A masked cooperative PPO policy with a
-centralized critic picks a server among those that respect the routing order, slice budgets, resource limits
-and deadline estimates; a lightweight advisory layer (Nash sharing, PID and leader election) biases the
-logits; a constricted PSO outer loop tunes the training; and a two-tier ledger feeds reputation and debt
-signals back into the state, reward and masks. In the paper's ablations, the feasibility masks account for
-most of the gain.
+%=====================================================================================================
 
-EdgePlus decides \emph{where} a task runs, but not \emph{how} the server handles it. Its queue model is
-Kingman's single-server approximation \cite{kingman1961}, which assumes first-come-first-served (FCFS) order;
-the high/moderate/low priority label is only used to break ties; and compute energy is modelled as
-$\kappa_s k_i$, independent of CPU frequency. Under heavy load this matters: in our reimplementation at
-150{,}000 tasks, 55\% of URLLC tasks (5--15\,s deadlines) miss their deadline, mostly because they wait behind
-mMTC tasks whose deadlines are 120--600\,s. EdgePlus defines a URLLC tail-reliability KPI but does not report
-per-class results, so this effect is not visible in its published figures. A recent survey of edge computing
-with 6G and cloud computing also lists workload classification and energy-efficient job distribution among
-the open challenges \cite{chaurasia2026}.
+Picture a city with thousands of air-quality sensors on lamp posts, rooftops and buses. Every few seconds each
+sensor sends a reading, and every reading needs a little computing: checking whether pollution has crossed a
+dangerous level, updating a pollution map, or simply storing the value for later. Some of these jobs are urgent.
+If fine dust suddenly spikes next to a school, an alert that arrives a minute late is of little use. Other jobs
+are relaxed: a reading that is only being logged can wait ten minutes and nobody will notice.
 
-We study two server-side rules that use each task's deadline slack:
+Sending all of this work to a big cloud data centre far away adds delay. \emph{Edge computing} solves part of the
+problem by placing smaller servers close to the sensors, for example next to the mobile base stations of a
+city, so that answers come back faster. Sixth-generation (6G) mobile networks, expected around 2030, are being
+designed to connect very large numbers of such devices with very low delay. Edge servers are still limited,
+though. When many tasks arrive at once, some of them have to wait, and some miss their deadlines.
+
+A recent and strong answer to the question \emph{``which server should each task go to?''} is EdgePlus
+\cite{edgeplus2026}, published in the \emph{IEEE Internet of Things Journal} in 2026. EdgePlus uses
+reinforcement learning: a program that learns, by trial and error in a simulated city, how to pick a good
+server for each task. Before it chooses, EdgePlus removes every server that clearly cannot finish the task in
+time. The paper reports that this ``feasibility-first'' design meets more deadlines under heavy load than four
+other learning-based schedulers.
+
+What EdgePlus does not change is what happens \emph{after} the choice. Once a task reaches a server, EdgePlus
+assumes that it waits in line in arrival order (\emph{first come, first served}) and that the server always runs
+at full CPU speed. When we rebuilt EdgePlus, we noticed two consequences:
+\begin{enumerate}
+\item \textbf{Urgent tasks wait behind relaxed ones.} At the heaviest load (150{,}000 tasks arriving in ten
+minutes), 55\% of the urgent tasks missed their deadline, while only 0.03\% of the relaxed logging tasks did.
+The servers had enough capacity overall; they were simply working on the wrong tasks first.
+\item \textbf{Spare time is wasted as energy.} At light load almost every task finishes long before its deadline.
+A CPU that runs a little slower uses noticeably less energy, so finishing early at full speed wastes energy for
+no benefit.
+\end{enumerate}
+
+This paper adds two simple rules inside every server to fix these two problems:
 \begin{itemize}
-\item \textbf{Deadline-first queueing with dropping.} Each server serves the waiting task with the earliest
-deadline (EDF) and drops a task once it cannot finish in time even at full speed. The feasibility mask
-estimates waits under the same order.
-\item \textbf{Guarded DVFS.} A task runs at a lower CPU frequency only if no other task is waiting for that
-server; the slow-down uses at most 80\% of the task's slack and adds at most 1.5\,s.
+\item \textbf{Rule 1, priority scheduling by deadline.} The server always runs the waiting task whose deadline is
+closest. This is called \emph{earliest deadline first} (EDF). If a task can no longer finish in time even at full
+speed, the server drops it instead of letting it block everyone else.
+\item \textbf{Rule 2, energy saving.} When nothing else is waiting, the server may lower its CPU speed for a task
+that has time to spare. The slow-down may use at most 80\% of the spare time and may add at most 1.5 seconds.
+Lowering the speed of a processor in this way is called \emph{dynamic voltage and frequency scaling} (DVFS); we
+call our careful version \emph{guarded DVFS}.
 \end{itemize}
-Both rules are fixed policies, so they can be added to a trained EdgePlus scheduler without retraining. Our
-contributions are: (i) the two rules and a mask consistent with them; (ii) an open reimplementation of
-EdgePlus calibrated against the published results; and (iii) an evaluation on the CityPulse workload used by
-EdgePlus and on the real AirDelhi dataset \cite{airdelhi2023}, with per-class metrics, ablations and paired
-statistics. Code, trained policies and raw results are released with this paper.
 
-\section{Background and Related Work}
-\subsection{EdgePlus}
-EdgePlus \cite{edgeplus2026} models a 100\,km$^2$ city with ten clusters, stationary and mobile edge servers
-and a cloud. Tasks belong to three slices (URLLC, eMBB, mMTC) with deadlines drawn from $U[5,15]$\,s,
-$U[30,120]$\,s and $U[120,600]$\,s. The latency of task $i$ on server $s$ is
-$L_{i,s}=L^{tx}+L^{move}+L^{queue}+L^{proc}$ and its energy is $E_{i,s}=E^{tx}+E^{move}+E^{comp}$ with
-$E^{comp}=\kappa_s k_i$. The reported results at 150{,}000 tasks are 82.77\% on-time completion, median latency
-53.2\,s and 95th-percentile latency 147.1\,s; without PSO (ablation A2) the on-time rate is 82.0\%.
+Both rules are fixed rules, not learned ones. This means they can be switched on for an EdgePlus model that has
+already been trained, with no extra training. It also makes the comparison very clean: in every experiment
+below, the trained EdgePlus model is exactly the same, and only the server rules change.
 
-\subsection{Deadline scheduling and overload}
-On a single preemptive processor, EDF meets every deadline of a periodic task set whenever its utilization
-does not exceed one \cite{liu1973}, and ordering jobs by due date minimizes the maximum lateness on a single
-machine \cite{jackson1955}. Under
-overload, however, EDF can make many tasks late in a row, the so-called domino effect, which is why overload
-handling such as rejecting or dropping hopeless tasks is used in practice \cite{locke1986,buttazzo2011}. Our
-ablation tests whether this applies when a learned dispatcher sits in front of the servers.
+Figure~\ref{fig:overview} shows where everything sits. The blue parts belong to EdgePlus; the orange parts are
+what we add.
 
-\subsection{Slack-based DVFS}
-Dynamic CPU power grows roughly with the cube of frequency, so the dynamic energy per cycle grows with its
-square, while static power favors finishing quickly. Real-time DVFS exploits slack to lower frequency without
-missing deadlines \cite{weiser1994,pillai2001}. On a shared edge server, slowing one task also delays tasks
-that arrive later, which motivates the guard in our rule.
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/system_overview.png}
+\caption{The system at a glance. A sensor reading becomes a task. EdgePlus (blue) decides which server should run
+it. Our two rules (orange) decide, inside each server, which waiting task runs next and how fast the CPU runs.}
+\label{fig:overview}
+\end{figure}
 
-\section{System Model}
-We keep EdgePlus's model and change only what happens inside a server. Each server $s$ has $c_s$ cores with
-maximum frequency $f_s$; task $i$ needs $k_i$ cycles, so its service time at full speed is $w_{i,s}=k_i/f_s$.
-A task arriving at time $t_i$ with relative deadline $d_i$ has absolute deadline $D_i=t_i+d_i$ and is on time
-if it finishes by $D_i$. Each server has three rule settings:
+\paragraph{What we found.} We rebuilt EdgePlus in a computer simulation of a 100\,km$^2$ city, trained it, and
+tested it on two datasets: the CityPulse air-quality data used by the EdgePlus authors, and real sensor data
+from 13 public buses in Delhi (AirDelhi \cite{airdelhi2023}). The main results are:
 \begin{itemize}
-\item \emph{queue order}: FCFS (EdgePlus), EDF, or fixed class priority (URLLC $>$ eMBB $>$ mMTC);
-\item \emph{late-task rule}: keep (EdgePlus) or drop a task when $t+w_{i,s}>D_i$ at the moment it would start;
-\item \emph{frequency}: always $f_s$ (EdgePlus), unguarded DVFS, or guarded DVFS.
+\item At heavy load, the share of tasks finished on time rises from 80.5\% to 99.7\% on CityPulse and from
+73.0\% to 96.5\% on AirDelhi. Missed urgent tasks fall from 55.4\% to 0.07\% on CityPulse.
+\item At light load, energy per task falls by 19.8\% on CityPulse and 11.2\% on AirDelhi, while the share of
+tasks finished on time stays the same or improves.
+\item The price is a longer wait for relaxed tasks. On CityPulse at heavy load, the 95th-percentile latency of
+all tasks rises from 148\,s to 298\,s, but the relaxed tasks still meet their deadlines (only 0.05\% miss).
+\item Each design detail matters. Without dropping, without deadline order, with fixed class priorities instead
+of deadlines, or without the guard on the slow-down, results are worse.
 \end{itemize}
-With a normalized frequency $\phi\in(0,1]$, we model compute energy as
+
+\paragraph{Contributions.} (1) Two server-side rules, one for priority scheduling and one for energy saving,
+together with a matching change to EdgePlus's waiting-time estimate. (2) An open rebuild of EdgePlus that we
+checked against the numbers in the original paper. (3) A careful evaluation on two datasets, one of them real
+measured data, with results per task class, per city area and over time, plus statistical tests.
+
+\paragraph{How to read this paper.} Section~\ref{sec:background} explains all the background ideas from scratch,
+with small examples. Section~\ref{sec:edgeplus} describes EdgePlus. Section~\ref{sec:method} presents our two
+rules. Section~\ref{sec:setup} describes the simulated city, the data and the experiments, and
+Section~\ref{sec:results} the results. Section~\ref{sec:discussion} discusses what the results mean and what
+their limits are. Table~\ref{tab:glossary} collects the terms used throughout.
+
+
+
+%=====================================================================================================
+\section{Background: the ideas you need}
+\label{sec:background}
+%=====================================================================================================
+
+This section explains, from the beginning, every idea the rest of the paper uses. Table~\ref{tab:glossary}
+summarises the most important words; you can come back to it at any time.
+
+\begin{table}[H]
+\centering
+\caption{Words used in this paper.}
+\label{tab:glossary}
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\bfseries\arraybackslash}p{3.4cm}L}
+\toprule
+Term & Meaning in this paper\\
+\midrule
+Task & One piece of computing work created by one sensor reading, for example ``check this reading for a
+pollution spike''.\\
+Deadline & The time by which a task must finish to be useful. A task that finishes later counts as a miss.\\
+On time & Finished before its deadline. The \emph{on-time rate} is the share of all tasks finished on time.\\
+Latency & Time from the moment a task is created until it finishes.\\
+Slack & How much time a task can still afford to lose: deadline minus the earliest possible finish time.\\
+Edge server & A computer near the sensors. Here every edge server has several CPU cores.\\
+Cluster & One area of the city with its own group of edge servers. Our city has 10 clusters.\\
+Queue & The line of tasks waiting for a free CPU core on a server.\\
+FCFS & First come, first served: tasks run in the order they arrived.\\
+EDF & Earliest deadline first: the waiting task with the closest deadline runs next.\\
+DVFS & Dynamic voltage and frequency scaling: running a CPU slower to save energy.\\
+URLLC, eMBB, mMTC & The three 6G service classes, used here for urgent, routine and relaxed tasks.\\
+Load & How many tasks arrive in one 10-minute episode: 50{,}000 (light), 100{,}000 (medium) or 150{,}000 (heavy).\\
+Episode & One simulated run of 10 minutes of task arrivals, followed by the time needed to finish them.\\
+Policy & The learned decision rule inside EdgePlus that picks a server for each task.\\
+Feasibility mask & A filter that removes servers that cannot finish a task in time, before the policy chooses.\\
+95th percentile & The value that 95\% of measurements are below. ``95th-percentile latency 10\,s'' means 95\% of
+tasks finished within 10\,s.\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Edge computing and 6G in plain words}
+A \emph{cloud data centre} is a large building full of computers, often hundreds or thousands of kilometres away
+from the user. It has almost unlimited capacity, but every request has to travel there and back, which adds
+delay. \emph{Edge computing} places smaller computers, called edge servers, close to where the data is
+produced, for example at a mobile base station in each neighbourhood. They have less capacity than the cloud
+but answer much faster.
+
+Each new generation of mobile networks has added new abilities. 5G introduced three kinds of service that 6G
+keeps and extends \cite{chaurasia2026}: \emph{ultra-reliable low-latency communication} (URLLC) for urgent
+messages, \emph{enhanced mobile broadband} (eMBB) for heavier everyday traffic, and \emph{massive machine-type
+communication} (mMTC) for huge numbers of small, delay-tolerant devices. EdgePlus maps air-quality tasks onto
+these three classes, and so do we (Table~\ref{tab:classes}).
+
+\begin{table}[H]
+\centering
+\caption{The three task classes. Deadline ranges and shares follow EdgePlus \cite{edgeplus2026}; the average CPU
+work is our choice (1 Gcycle = one billion CPU cycles; a 3\,GHz core does three of them per second).}
+\label{tab:classes}
+\small
+\begin{tabularx}{\textwidth}{lLccc}
+\toprule
+Class & What it stands for in our city & Deadline & Share of tasks & Average CPU work\\
+\midrule
+URLLC & urgent: a reading that looks like a dangerous pollution spike & 5--15\,s & 20\% & 6 Gcycles\\
+eMBB & routine: normal analysis and map updates & 30--120\,s & 50\% & 12 Gcycles\\
+mMTC & relaxed: low readings that only need to be logged & 120--600\,s & 30\% & 9 Gcycles\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{How a server works through its tasks}
+An edge server has a few CPU cores. Each core runs one task at a time from start to finish (it does not pause a
+task halfway to run another). When all cores are busy, new tasks wait in a \emph{queue}. Whenever a core becomes
+free, the server must decide which waiting task to run next. This decision is called \emph{scheduling}, and the
+rule used to make it is the \emph{scheduling policy}. Three common ones are:
+\begin{itemize}
+\item \textbf{First come, first served (FCFS):} the task that has waited longest runs next. It is simple and
+fair in one sense, but it ignores deadlines completely. This is what EdgePlus assumes.
+\item \textbf{Fixed priority:} every task has a priority class, and the highest class always goes first. For us
+that would mean URLLC before eMBB before mMTC.
+\item \textbf{Earliest deadline first (EDF):} the waiting task whose deadline comes soonest runs next. EDF is a
+kind of priority scheduling in which the priority is the deadline itself, so a relaxed task gradually becomes
+more urgent as its deadline approaches.
+\end{itemize}
+
+EDF has a famous strength and a famous weakness. The strength: on a single processor that can pause and resume tasks, EDF
+meets every deadline as long as the processor is not overloaded \cite{liu1973}, and ordering tasks by deadline also
+keeps the worst lateness as small as possible \cite{jackson1955}. The weakness: when there is more work than time
+(\emph{overload}), EDF can make things worse than FCFS. It keeps running the task with the closest deadline even
+when that task is already doomed, and every task behind it then becomes late too. This chain reaction is known
+as the \emph{domino effect} \cite{locke1986,buttazzo2011}. The usual fix is to drop, or skip, tasks that can no
+longer make their deadline. Our worked example below shows all three cases.
+
+\begin{examplebox}[Worked example 1: why the order of tasks matters]
+One server with a single core receives five tasks (all times in seconds):
+
+\smallskip
+\centering
+\begin{tabular}{cccccc}
+\toprule
+Task & Class & Arrives at & Needs & Deadline (relative) & Must finish by\\
+\midrule
+A & mMTC & 0.0 & 4 & 300 & 300.0\\
+B & eMBB & 0.5 & 3 & 60 & 60.5\\
+C & URLLC & 1.0 & 2 & 8 & 9.0\\
+D & URLLC & 1.5 & 2 & 6 & 7.5\\
+E & URLLC & 2.0 & 3 & 3 & 5.0\\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright
+Task A arrives first and runs from 0 to 4\,s under every rule, because nothing else is waiting yet. At
+$t=4$\,s, tasks B, C, D and E are all waiting, and the rules make different choices (Figure~\ref{fig:toy}):
+\begin{itemize}[leftmargin=*]
+\item \textbf{FCFS} runs them in arrival order B, C, D, E. B and C finish in time, but D finishes at 11\,s
+(deadline 7.5) and E at 14\,s (deadline 5). \textbf{3 of 5 on time.}
+\item \textbf{EDF without dropping} runs E first because its deadline (5\,s) is the closest. But E needs 3\,s and
+cannot finish before 7\,s, so it is late anyway, and while it runs, D and C also become late. \textbf{2 of 5 on
+time:} the domino effect makes EDF worse than FCFS.
+\item \textbf{EDF with dropping (our Rule~1)} sees at $t=4$\,s that E cannot possibly finish by 5\,s, drops it,
+and runs D (4--6\,s), C (6--8\,s) and B (8--11\,s). \textbf{4 of 5 on time.} Task E was lost under every rule;
+dropping it early saved the other three.
+\end{itemize}
+\end{examplebox}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/toy_queue.png}
+\caption{Worked example 1 as a timeline. Each bar is a task on the server's single core; hatched bars missed
+their deadline.}
+\label{fig:toy}
+\end{figure}
+
+\subsection{CPU speed and energy}
+A processor's power use has two parts. The \emph{dynamic} part is spent on the switching of transistors while
+computing. If the clock frequency and the supply voltage are lowered together, dynamic power falls roughly with
+the cube of the frequency, so the dynamic energy needed for a fixed amount of work falls roughly with its square.
+The \emph{static} part is power drawn just because the chip is switched on and busy; it adds up with running
+time, so running slower makes it larger. DVFS, lowering the voltage and frequency when full speed is not needed,
+exploits this trade-off and is widely used in phones and servers \cite{weiser1994,pillai2001}.
+
+We model the energy of a task run at a fraction $\phi$ of full speed ($0<\phi\le1$) as
 \begin{equation}
-E^{comp}_{i,s}(\phi)=\kappa_s k_i\left(\alpha\phi^{2}+\frac{1-\alpha}{\phi}\right),
+E(\phi) = E_{\text{full}} \left(0.75\,\phi^{2} + \frac{0.25}{\phi}\right),
 \label{eq:energy}
 \end{equation}
-where $\alpha=0.75$ is the dynamic share at full speed. The first term is dynamic energy; the second is static
-power over the longer busy time. At $\phi=1$, (\ref{eq:energy}) equals EdgePlus's $\kappa_s k_i$, so the
-baseline's energy is unchanged; the energy-optimal level is near $\phi\approx0.55$.
+where $E_{\text{full}}$ is its energy at full speed, 75\% of which is dynamic and 25\% static. At $\phi = 1$ the
+formula gives exactly $E_{\text{full}}$, so the energy of EdgePlus itself is unchanged. Figure~\ref{fig:dvfs}
+(left) plots the formula. Slowing down saves energy until about 55\% speed; below that, the extra static energy
+outweighs the dynamic saving. Table~\ref{tab:speeds} lists the speeds our rule may choose.
 
-\section{Slack-Aware Server Rules}
-\subsection{Deadline-first queueing with dropping}
-When a core becomes free, the server removes the waiting task with the earliest $D_i$. If it cannot finish in
-time even at full speed, it is dropped, counted as a failure, and the next task is examined
-(Algorithm~\ref{alg:rules}). Dropping frees capacity that FCFS would spend on tasks that are already lost.
+\begin{table}[H]
+\centering
+\caption{The CPU speeds our rule may choose, how much longer a task takes, and how much energy it then needs
+(from Equation~\ref{eq:energy}).}
+\label{tab:speeds}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+Speed (fraction of full) & 100\% & 90\% & 80\% & 70\% & 60\% & 50\%\\
+\midrule
+Running time & 1.00$\times$ & 1.11$\times$ & 1.25$\times$ & 1.43$\times$ & 1.67$\times$ & 2.00$\times$\\
+Energy needed & 1.000 & 0.885 & 0.793 & 0.725 & 0.687 & 0.688\\
+Energy saved & 0\% & 11.5\% & 20.8\% & 27.5\% & 31.3\% & 31.2\%\\
+\bottomrule
+\end{tabular}
+\end{table}
 
-The mask must agree with the queue order. For an arriving task $i$, EdgePlus estimates the wait from the
-server's load. With EDF, only queued work with an earlier deadline is ahead of the new task:
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/dvfs_energy.png}
+\caption{Left: energy of one task against CPU speed (Equation~\ref{eq:energy}); the dots are the speeds we allow.
+Right: worked example 2. A task needing 3\,s at full speed with 6\,s of spare time is run at 70\% speed, takes
+4.3\,s and uses 28\% less energy.}
+\label{fig:dvfs}
+\end{figure}
+
+There is a catch. A slowed-down task holds its CPU core for longer. If an urgent task arrives in the meantime and
+all cores are busy, the urgent task has to wait for that longer time. This is why our energy rule comes with a
+guard (Section~\ref{sec:rule2}).
+
+\subsection{Reinforcement learning in one page}
+Reinforcement learning (RL) is a way for a program, called the \emph{agent}, to learn good decisions by trial and
+error. At each step the agent looks at the current situation (the \emph{state}), picks an \emph{action}, and later
+receives a \emph{reward}: a number that says how good the outcome was. Over many attempts the agent adjusts its
+\emph{policy}, the rule that maps states to actions, so that it collects more reward.
+
+In EdgePlus, a step happens every time a new task arrives:
+\begin{itemize}
+\item the \textbf{state} describes the task (class, deadline, size) and the candidate servers (how busy they are,
+how long the task would wait, how far away they are);
+\item the \textbf{action} is the choice of one server;
+\item the \textbf{reward} is positive if the task finishes on time and negative if it is late, with smaller
+penalties for long latency, high energy, using the cloud and choosing unreliable servers.
+\end{itemize}
+EdgePlus learns with \emph{proximal policy optimization} (PPO) \cite{schulman2017ppo}, a popular RL method that
+improves the policy in small, careful steps so that learning does not become unstable. PPO uses two neural
+networks: the \emph{actor}, which gives each candidate server a score, and the \emph{critic}, which estimates how
+good the current situation is and helps the actor tell lucky outcomes from good decisions.
+
+\begin{simplebox}[In simple words: the feasibility mask]
+Before the actor scores the servers, EdgePlus removes every server that clearly cannot finish the task in time
+(or that is out of memory, battery or reserved capacity). The actor then only chooses among the rest. This is
+like a delivery app that hides restaurants which are already closed before you start choosing: you can still
+make a poor choice, but never an impossible one. The EdgePlus authors found that this mask was the single most
+important part of their design.
+\end{simplebox}
+
+\subsection{The statistics used in this paper}
+Every number we report is an average over 30 runs: 3 separately trained EdgePlus models $\times$ 10 different
+test episodes. To show how certain an average is, we give a \emph{95\% confidence interval} (CI), written
+``mean $\pm$ half-width''; roughly, it is the range in which the true average very likely lies. To check whether
+a difference is real or just luck, we use \emph{paired} comparisons: the same trained model on the same test
+episode is run once with EdgePlus's rules and once with ours, and only the difference matters. The
+\emph{Wilcoxon signed-rank test} \cite{wilcoxon1945} turns these 30 differences into a \emph{p-value}, the
+probability of seeing differences this consistent if the rules made no difference at all; small values (below
+0.05) mean the difference is real. Because we run many tests, we adjust the p-values with the
+\emph{Benjamini--Hochberg} method \cite{bh1995}, which keeps the share of false alarms low.
+
+%=====================================================================================================
+\section{EdgePlus: the starting point}
+\label{sec:edgeplus}
+%=====================================================================================================
+
+\subsection{The city and its servers}
+EdgePlus \cite{edgeplus2026} models a smart city of 100\,km$^2$ divided into 10 clusters. Each cluster has
+stationary edge servers and mobile edge servers (servers mounted on vehicles that can drive to busy areas), and
+the whole city shares a cloud data centre. A task is first offered to servers in a fixed \emph{routing order}:
+the stationary servers of its own cluster, then the mobile server of its own cluster, then mobile servers in
+neighbouring clusters, and finally the cloud. The latency of a task is the sum of four parts: sending the data
+(transmission), driving a mobile server closer if needed (movement), waiting in the queue, and computing.
+
+\subsection{How EdgePlus picks a server}
+For every task, EdgePlus does three things:
+\begin{enumerate}
+\item The \textbf{feasibility mask} removes servers that cannot finish the task in time or that would break a
+limit: memory, battery of a mobile server, or the capacity reserved for each class (``network slices'').
+\item The \textbf{actor network} gives every remaining server a score.
+\item An \textbf{advisory layer} adds small bonuses to the scores. A \emph{Nash sharing} rule favours clusters
+willing to accept extra work, a \emph{PID controller} (a classic feedback controller) steers each cluster towards
+a target utilisation, and \emph{leader election} favours the least-loaded, best-charged server of each cluster.
+\end{enumerate}
+The task goes to a server picked according to the final scores. EdgePlus also has a \emph{blockchain-lite ledger}:
+it records completed tasks, and the record is used to give each server a \emph{reputation} (its recent share of
+on-time tasks) and each cluster a \emph{debt} (how far it is below a throughput target). Both enter the state,
+the reward and the mask; urgent tasks avoid servers with poor reputation.
+
+\subsection{What EdgePlus reports, and what it leaves open}
+EdgePlus also includes a particle swarm optimisation (PSO) outer loop that tunes training, and a security layer
+(encryption and signatures). At the heaviest load (150{,}000 tasks) the paper reports 82.77\% of tasks on time,
+a median latency of 53.2\,s and a 95th-percentile latency of 147.1\,s; without PSO the on-time rate is 82.0\%.
+
+Three things are left open. First, the queue model that EdgePlus uses to estimate waiting time (Kingman's
+formula \cite{kingman1961}) assumes FCFS; nothing gives urgent tasks priority inside a server. The paper does
+attach a high/moderate/low priority label to each task, but it is only used to break ties. Second, compute
+energy is modelled as a constant times the CPU work, so the CPU always runs at full speed. Third, the paper
+defines a URLLC reliability measure but reports results only for all tasks together, so it cannot show which
+classes miss their deadlines. Our work addresses all three.
+
+%=====================================================================================================
+\section{Our method: two rules inside each server}
+\label{sec:method}
+%=====================================================================================================
+
+Both rules work inside a server and use the same idea: \emph{slack}, the time a task can still afford to lose.
+If a task with deadline $D$ would finish at time $t + w$ when started now at full speed (it needs $w$ seconds),
+its slack is
 \begin{equation}
-\hat{W}_{i,s}=r^{min}_s+\frac{1}{c_s}\Big(\sum_{j\in Q_s:\,D_j\le D_i}w_{j,s}+w^{flight}_s\Big),
+\sigma = D - (t + w).
+\label{eq:slack}
+\end{equation}
+A task with small slack is urgent and should go first at full speed. A task with large slack can wait, or can
+run more slowly.
+
+\subsection{Rule 1: earliest deadline first, with dropping}
+\label{sec:rule1}
+Whenever a CPU core becomes free, the server:
+\begin{enumerate}
+\item looks at all waiting tasks and takes the one with the earliest deadline;
+\item checks whether it can still finish in time at full speed, that is, whether its slack $\sigma \ge 0$;
+\item if it can, runs it; if it cannot, drops it (it counts as a missed deadline) and goes back to step 1.
+\end{enumerate}
+Dropping only removes tasks that are already lost: such a task would have missed its deadline under any rule. The
+benefit is that the CPU time it would have used goes to tasks that can still be saved, which stops the domino
+effect of worked example~1.
+
+\paragraph{Keeping the mask honest.} EdgePlus's mask asks ``how long would this task wait at this server?''.
+With FCFS the answer is ``until all the work already queued has been done''. With EDF, a new task only waits for
+queued tasks whose deadline is earlier than its own. So we change the estimate to
+\begin{equation}
+\widehat{W} = r_{\min} + \frac{1}{c}\Bigl(\sum_{\text{queued } j \text{ with } D_j \le D} w_j \; + \; w_{\text{in transit}}\Bigr),
 \label{eq:wait}
 \end{equation}
-where $r^{min}_s$ is the shortest remaining service time when all cores are busy (zero otherwise) and
-$w^{flight}_s$ is the work already dispatched to $s$ but still in transit. For FCFS the sum runs over the
-whole queue. Without (\ref{eq:wait}), the mask would keep rejecting urgent tasks that EDF would in fact serve
-on time.
+where $c$ is the number of cores, $r_{\min}$ is the time until the first busy core becomes free (zero if a core is
+free), $w_j$ is the work of a queued task $j$, and $w_{\text{in transit}}$ is work already sent to this server
+but not yet arrived. Without this change the mask would keep rejecting busy servers for urgent tasks, even though
+EDF would let those tasks jump the queue and finish in time.
 
-\subsection{Guarded DVFS}
-When task $i$ starts at time $t$, its slack at full speed is $\sigma_i=D_i-t-w_{i,s}$. The rule picks the lowest
-level $\phi$ in $\{0.5,0.6,\dots,1.0\}$ whose extra service time fits a budget:
+\begin{examplebox}[Worked example 3: the waiting-time estimate]
+A server has 2 cores, both busy for another 1\,s. In its queue are a relaxed task (deadline in 400\,s, needs
+6\,s) and a routine task (deadline in 80\,s, needs 4\,s). A new urgent task arrives with a 10\,s deadline.
+Under FCFS it would wait $1 + (6+4)/2 = 6$\,s. Under EDF neither queued task has an earlier deadline, so it waits
+only $r_{\min} = 1$\,s. With the FCFS estimate the mask might wrongly reject this server; with
+Equation~\ref{eq:wait} it correctly accepts it.
+\end{examplebox}
+
+\subsection{Rule 2: guarded CPU slow-down}
+\label{sec:rule2}
+When a task is about to start, the server may run it below full speed, but only if all three conditions hold:
+\begin{enumerate}
+\item \textbf{nothing else is waiting} for this server and nothing is on its way to it;
+\item the extra running time is at most \textbf{80\% of the task's slack}, so it still finishes on time with a
+margin;
+\item the extra running time is at most \textbf{1.5 seconds} (the guard).
+\end{enumerate}
+Among the allowed speeds $\{50\%, 60\%, \dots, 100\%\}$ the server picks the lowest one that satisfies these
+conditions. Written as a formula, it picks the smallest $\phi$ with
 \begin{equation}
-\frac{w_{i,s}}{\phi}-w_{i,s}\le\Delta_i,
+\frac{w}{\phi} - w \;\le\; \Delta, \qquad
+\Delta = \begin{cases}\min(0.8\,\sigma,\; 1.5\,\text{s}) & \text{if nothing is waiting,}\\
+0 & \text{otherwise.}\end{cases}
 \label{eq:dvfs}
 \end{equation}
-\begin{equation}
-\Delta_i=\begin{cases}\min(\beta\sigma_i,\,G) & \text{if } Q_s=\emptyset,\ w^{flight}_s=0,\\
-0 & \text{otherwise,}\end{cases}
-\label{eq:guard}
-\end{equation}
-with $\beta=0.8$ and $G=1.5$\,s. The unguarded variant uses $\Delta_i=\beta\sigma_i$ regardless of the queue.
-The guard bounds how much a slowed task can delay an urgent task that arrives while it runs.
 
-\begin{algorithm}[t]
-\caption{Server rules when a core becomes free at time $t$}
+Why the guard? Conditions 2 and 3 protect the task itself and the tasks that might arrive while it runs. Without
+condition 1 and the 1.5\,s cap, a relaxed task with 300\,s of slack could be slowed to half speed, doubling its
+running time. An urgent task arriving a moment later could then find every core occupied by slow tasks. We test
+exactly this ``unguarded'' version in Section~\ref{sec:ablation} and it performs very badly.
+
+\begin{examplebox}[Worked example 2: slowing down safely]
+A task needs 3\,s at full speed and has 6\,s of slack, and nothing else is waiting. The allowed extra time is
+$\min(0.8 \times 6,\ 1.5) = 1.5$\,s. At 70\% speed the task takes $3/0.7 = 4.3$\,s, only 1.3\,s extra, so 70\% is
+allowed; 60\% would take 5.0\,s, 2\,s extra, which is too much. So the server runs it at 70\% speed. From
+Table~\ref{tab:speeds}, it needs 0.725 of the full-speed energy: \textbf{27.5\% less energy}, and it still
+finishes 4.7\,s before its deadline (Figure~\ref{fig:dvfs}, right).
+\end{examplebox}
+
+\subsection{The complete procedure}
+Algorithm~\ref{alg:rules} combines the two rules. It runs every time a core of a server becomes free, and also
+when a task reaches a server that has a free core.
+
+\begin{algorithm}[H]
+\caption{What a server does when a CPU core becomes free at time $t$}
 \label{alg:rules}
 \begin{algorithmic}[1]
-\While{queue $Q_s$ not empty}
-  \State $i \gets \arg\min_{j\in Q_s} D_j$; remove $i$ from $Q_s$ \Comment{EDF}
-  \If{$t + w_{i,s} > D_i$} drop $i$ (failure) \textbf{and continue} \EndIf
-  \State $\sigma_i \gets D_i - t - w_{i,s}$
-  \If{$Q_s=\emptyset$ \textbf{and} nothing in flight} $\Delta \gets \min(\beta\sigma_i, G)$
-  \Else\ $\Delta \gets 0$ \EndIf
-  \State $\phi \gets \min\{\phi\in\Phi : w_{i,s}/\phi - w_{i,s} \le \Delta\}$
-  \State run $i$ on the free core for $w_{i,s}/\phi$; \textbf{return}
+\While{the queue is not empty}
+  \State take the waiting task $i$ with the earliest deadline $D_i$ \Comment{Rule 1: EDF}
+  \State $\sigma \gets D_i - t - w_i$ \Comment{slack at full speed}
+  \If{$\sigma < 0$}
+     \State drop task $i$ (count it as missed) and \textbf{continue} \Comment{Rule 1: drop}
+  \EndIf
+  \If{the queue is empty and nothing is in transit} $\Delta \gets \min(0.8\sigma, 1.5\,\text{s})$
+  \Else\ $\Delta \gets 0$
+  \EndIf
+  \State $\phi \gets$ the lowest allowed speed with $w_i/\phi - w_i \le \Delta$ \Comment{Rule 2: guarded DVFS}
+  \State run task $i$ on the free core at speed $\phi$ and \textbf{stop}
 \EndWhile
 \end{algorithmic}
 \end{algorithm}
 
-\section{Experimental Setup}
-\subsection{Reimplementation}
-We reimplemented EdgePlus in Python as a discrete-event simulator. Each cluster has four stationary nodes with
-24 cores each (2.4--3.6\,GHz) and one mobile node with 16 cores at 2.4\,GHz (15\,m/s, 2\,km radio range,
-2\,kJ battery); the cloud has 32 cores at 3.5\,GHz and adds 2\,s of delay. We calibrated the core count so
-that a simple routing rule (lowest routing tier, earliest estimated finish) gives about 100\% on-time
-completion at 50{,}000 tasks and about 80\% at 150{,}000, matching the paper. Radio rates follow EdgePlus's
-goodput model with per-slice bandwidths of 20/50/5\,MHz, frequency reuse 3, 23\,dBm transmit power with a
-20\,dB beamforming gain and the path loss $128.1+37.6\log_{10}d$ \cite{3gpp36814}. Slice compute budgets
-reserve 25/65/35\% of a cluster's cores over a 60\,s window. The mask applies the routing order, slice
-budgets, memory, mobile battery, deadline estimates and URLLC reputation quarantine; if no server passes, the
-server with the earliest estimated finish is used.
+\subsection{Why the two rules fit together, and what they cost}
+Both rules follow the same logic: urgent tasks (small slack) go first and run at full speed; relaxed tasks
+(large slack) wait or run slower. Rule~1 improves the on-time rate when servers are busy, which is exactly when
+Rule~2 rarely acts because queues are rarely empty. When servers are quiet, Rule~1 changes little and Rule~2 saves
+energy. So the two rules help at different loads without getting in each other's way.
 
-The policy follows EdgePlus Sec.~III-E: one actor network (two tanh layers of 64 units) shared by all
-clusters scores each candidate server from task, cluster and server features; the advisory bias (Nash
-sharing, PID with EdgePlus's gains 1.90/1.20/0.06, leader election) is added to the logits; infeasible
-servers are masked before the softmax; and a centralized critic (two layers of 128 units) sees the whole city.
-The reward is EdgePlus's Eq.~7 with reputation and debt shaping (Eq.~15), using class weights 3/1.5/1. We do
-not implement the PSO outer loop, so our baseline corresponds to EdgePlus's ablation A2. Mobile relocation
-uses straight-line distance times a 1.3 detour factor instead of CBS--D* Lite, and the ledger is represented
-only by its reputation and debt signals, since its 0.39\,ms validation is off the task path.
+Neither rule needs training. The extra work per decision is small: sorting the queue by deadline and checking a
+few speeds. In our simulator, a whole episode including the simulation itself takes 0.23\,ms per task with
+EdgePlus's rules and 0.30\,ms with ours, on one CPU core.
 
-\subsection{Datasets and episodes}
-\textbf{CityPulse} \cite{citypulse} is the pollution dataset EdgePlus calls Bra\c{s}ov: 449 sites,
-7.89 million readings every 5\,min from August to October 2014. CityPulse describes the values as generated
-by a bounded random walk. We use the first 43 days for training and the last 18 for testing.
-\textbf{AirDelhi} \cite{airdelhi2023} contains real PM\textsubscript{2.5}/PM\textsubscript{10} readings from
-low-cost sensors on 13 public buses in Delhi. We use December 2020 (training statistics) and January 2021
-(testing), and remove readings taken while a bus was parked, i.e.\ moved less than 50\,m over about
-3\,min (30.8\% of readings; idle buses otherwise put 38\% of all readings into three 1\,km$^2$ cells),
-leaving 4.04 million readings.
+%=====================================================================================================
+\section{How we tested the idea}
+\label{sec:setup}
+%=====================================================================================================
 
-Following EdgePlus's Algorithm~3, every reading becomes one task. Severity is the largest robust z-score
-across pollutants plus half of the largest positive rate of change. The 20\% most severe tasks of an episode
-are URLLC, the next 50\% eMBB and the remaining 30\% mMTC (EdgePlus Table IV), with EdgePlus's deadline ranges.
-Mean CPU work is 6/12/9 Gcycles per class, scaled with severity and log-normal noise. An episode takes $N$
-consecutive readings and compresses their time span into a 600\,s arrival window; the loads are
-$N\in\{50{,}000;100{,}000;150{,}000\}$. Clusters come from weighted K-means on each dataset's training
-positions (density plus exceedance weight) with Delaunay neighbors; the server inventory is the same in both
-cities.
+\subsection{The simulated city}
+We wrote a simulator in Python that follows EdgePlus's description: a 10\,km $\times$ 10\,km city with 10 clusters,
+each with 4 stationary edge servers and 1 mobile edge server, plus one cloud. The simulator is \emph{event
+driven}: it jumps from one event to the next (a task arrives, a task finishes, a mobile server reaches a new
+area), so it can process 150{,}000 tasks in under a minute. Table~\ref{tab:servers} lists the servers.
 
-\subsection{Training and evaluation}
-We train one EdgePlus policy per load and seed (3 loads $\times$ 3 seeds) for 60 PPO updates
-\cite{schulman2017ppo}, each on a full training episode, with GAE \cite{schulman2016gae} ($\gamma=0.95$,
-$\lambda=0.9$), clip 0.2, four epochs, minibatch 4096, learning rate $3\times10^{-4}$ and entropy coefficient
-0.01. Training uses the baseline server rules and takes 25, 45 and 61 CPU-minutes per run at the three loads
-(6.6 CPU-hours in total) on one core. At 150{,}000 tasks the training on-time rate rises from 74.6\% in the
-first ten updates to 79.4\% in the last ten (stochastic policy), and the trained policy beats the routing rule
-by 8.5 points in evaluation (80.5\% vs 72.0\%).
-
-Each frozen policy is evaluated greedily on 10 test episodes per load, under each rule variant, giving 30
-paired samples (3 seeds $\times$ 10 episodes) per configuration. For Delhi we use the CityPulse-trained
-policies without retraining. We report means with 95\% confidence intervals and compare each variant with
-the baseline using the Wilcoxon signed-rank test \cite{wilcoxon1945} on pairs that share the policy and test
-episode, with Benjamini--Hochberg correction \cite{bh1995}. Latency percentiles are computed over completed
-tasks; dropped tasks count as missed deadlines.
-
-\section{Results}
-\subsection{Fidelity of the reimplementation}
-Table~\ref{tab:fidelity} compares our baseline with the published numbers. At 50{,}000 tasks both reach
-100\% on time with similar latencies. At 150{,}000 tasks our policy reaches 80.5\% against 82.0\% for EdgePlus
-without PSO, with almost the same 95th-percentile latency (148\,s vs 147--159\,s); our median latency and
-cloud share are lower. The main difference is at 100{,}000 tasks, where the paper reports 82.5\% and we
-measure 99.9\%. CityPulse readings arrive at a flat rate, so in our simulator the medium load is far from
-saturation; we therefore also report AirDelhi, whose arrivals are bursty.
-
-\begin{table}[t]
-\caption{Our EdgePlus reimplementation against the paper (CityPulse). On-time and cloud share in \%,
-latencies in s.}
-\label{tab:fidelity}
+\begin{table}[H]
 \centering
+\caption{The servers in the simulated city.}
+\label{tab:servers}
 \small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llrrrr}
+\begin{tabularx}{\textwidth}{lcL}
 \toprule
-Load & Source & On-time & $L_{p50}$ & $L_{p95}$ & Cloud\\
+Server type & How many & Details\\
 \midrule
-50k & Paper & 100.00 & 3.98 & 10.24 & --\\
- & Ours & 100.00 & 3.55 & 7.35 & 0.00\\
-\midrule
-100k & Paper & 82.50 & -- & $\approx$151 & --\\
- & Ours & 99.87 & 4.20 & 11.79 & 0.09\\
-\midrule
-150k & Paper & 82.77 & 53.23 & 147.09 & 6.1\\
- & Paper, no PSO & 82.0 & 54.8 & 158.9 & 6.6\\
- & Ours, no PSO & 80.52 & 27.95 & 148.10 & 3.78\\
- & Routing rule & 71.99 & 38.39 & 125.01 & 3.79\\
+Stationary edge server & 4 per cluster (40) & 24 cores each, at 2.4, 3.0, 3.6 and 3.0\,GHz; 64\,GB memory; placed
+around the cluster centre\\
+Mobile edge server & 1 per cluster (10) & 16 cores at 2.4\,GHz; 32\,GB memory; drives at 15\,m/s; 2\,km radio range;
+2\,kJ battery; can move to an overloaded neighbouring cluster every 20\,s\\
+Cloud data centre & 1 & 32 cores at 3.5\,GHz; 2\,s extra delay for sending data there and back\\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
-\subsection{Main results}
-Table~\ref{tab:main} and Fig.~\ref{fig:main} show the trained EdgePlus policy with and without the rules.
-On CityPulse at 150{,}000 tasks, deadline-first queueing with dropping raises on-time completion from 80.5\%
-to 99.6\%. URLLC misses fall from 55.4\% to 0.07\% and eMBB misses from 16.8\% to 0.65\%, while mMTC misses
-stay near zero (0.03\% to 0.05\%); 0.36\% of tasks are dropped. Guarded DVFS alone lowers energy per task by
-19.6\% at 50{,}000 tasks, 10.1\% at 100{,}000 and 4.4\% at 150{,}000, because servers are rarely idle at high
-load. Combined, the two rules keep the on-time gains and reduce energy by 19.8\%, 10.0\% and 5.2\%. For the
-combined rules, every difference in on-time rate and energy against the baseline is significant (BH-adjusted
-$p<10^{-3}$, Wilcoxon on 30 pairs). At 50{,}000 tasks the combined rules lower the on-time rate by
-0.002 points (about two tasks in 100{,}000), which is statistically detectable but negligible.
+How do we know where the clusters are? Like EdgePlus, we group the sensor locations with \emph{weighted
+K-means}, a standard method that places 10 centres so that every sensor is close to one of them; sensors with
+higher pollution readings count a little more. Clusters whose centres are next to each other (found with a
+Delaunay triangulation) are \emph{neighbours} and may share their mobile servers. Figure~\ref{fig:topology}
+shows the result for both datasets.
 
-\begin{table*}[t]
-\caption{EdgePlus with and without the server rules (mean of 30 paired runs). Misses are per class;
-latencies in seconds over completed tasks; energy in mJ per task.}
-\label{tab:main}
+\begin{figure}[H]
 \centering
-\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lllrrrrrrrr}
-\toprule
- & & & On-time & \multicolumn{3}{c}{Missed deadlines (\%)} & & & URLLC & Energy\\
-\cmidrule(lr){5-7}
-Data & Load & Rules & (\%) & URLLC & eMBB & mMTC & $L_{p50}$ & $L_{p95}$ & $L_{p95}$ & (mJ)\\
-\midrule
-\multirow{12}{*}{CityPulse} & \multirow{4}{*}{50k} & EdgePlus & 100.00 & 0.00 & 0.00 & 0.00 & 3.55 & 7.35 & 4.42 & 27.04\\
- & & + EDF \& drop & 100.00 & 0.00 & 0.00 & 0.00 & 3.55 & 7.35 & 4.42 & 27.04\\
- & & + guarded DVFS & 99.99 & 0.04 & 0.00 & 0.00 & 4.73 & 8.24 & 5.48 & 21.76\\
- & & + both & 100.00 & 0.01 & 0.00 & 0.00 & 4.72 & 8.19 & 5.36 & \textbf{21.69}\\
-\cmidrule{2-11}
- & \multirow{4}{*}{100k} & EdgePlus & 99.87 & 0.66 & 0.00 & 0.00 & 4.20 & 11.79 & 5.48 & 27.61\\
- & & + EDF \& drop & 99.99 & 0.04 & 0.00 & 0.00 & 3.82 & 9.72 & 5.02 & 27.59\\
- & & + guarded DVFS & 99.84 & 0.79 & 0.00 & 0.00 & 5.05 & 12.39 & 6.51 & 24.83\\
- & & + both & \textbf{99.99} & 0.04 & 0.00 & 0.00 & 4.59 & 10.48 & 5.80 & 24.86\\
-\cmidrule{2-11}
- & \multirow{4}{*}{150k} & EdgePlus & 80.52 & 55.36 & 16.80 & 0.03 & 27.95 & 148.10 & 92.32 & 28.36\\
- & & + EDF \& drop & 99.64 & 0.07 & 0.65 & 0.05 & 5.46 & 290.63 & 6.00 & 28.07\\
- & & + guarded DVFS & 79.60 & 57.11 & 17.94 & 0.04 & 29.81 & 155.12 & 95.64 & 27.11\\
- & & + both & \textbf{99.65} & 0.07 & 0.64 & 0.05 & 5.99 & 298.37 & 6.24 & \textbf{26.88}\\
-\midrule
-\multirow{12}{*}{\shortstack{AirDelhi\\(no\\retraining)}} & \multirow{4}{*}{50k} & EdgePlus & 98.75 & 5.76 & 0.19 & 0.00 & 4.38 & 25.26 & 10.29 & 24.03\\
- & & + EDF \& drop & 99.85 & 0.16 & 0.24 & 0.00 & 3.71 & 26.74 & 5.70 & 23.89\\
- & & + guarded DVFS & 98.58 & 6.54 & 0.22 & 0.00 & 5.42 & 26.21 & 11.03 & 21.61\\
- & & + both & 99.84 & 0.17 & 0.25 & 0.00 & 4.66 & 28.37 & 6.23 & \textbf{21.33}\\
-\cmidrule{2-11}
- & \multirow{4}{*}{100k} & EdgePlus & 89.26 & 38.58 & 5.98 & 0.11 & 13.28 & 109.55 & 42.06 & 24.60\\
- & & + EDF \& drop & 98.74 & 0.95 & 1.55 & 0.99 & 6.39 & 153.86 & 8.26 & 23.96\\
- & & + guarded DVFS & 88.84 & 40.57 & 6.03 & 0.13 & 14.07 & 109.86 & 42.46 & 23.87\\
- & & + both & \textbf{98.78} & 0.97 & 1.50 & 0.94 & 7.10 & 154.95 & 8.39 & \textbf{23.24}\\
-\cmidrule{2-11}
- & \multirow{4}{*}{150k} & EdgePlus & 72.97 & 72.96 & 24.43 & 0.76 & 38.99 & 338.80 & 182.86 & 25.04\\
- & & + EDF \& drop & 96.54 & 3.55 & 3.97 & 2.57 & 15.75 & 316.50 & 10.95 & 23.56\\
- & & + guarded DVFS & 72.35 & 74.97 & 24.84 & 0.80 & 39.91 & 341.52 & 174.32 & 24.76\\
- & & + both & \textbf{96.47} & 3.68 & 4.04 & 2.59 & 16.86 & 316.13 & 11.00 & \textbf{23.21}\\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.9\textwidth]{figures/main_brasov.png}\\[2pt]
-\includegraphics[width=0.9\textwidth]{figures/main_delhi.png}
-\caption{On-time completion, URLLC misses and energy per task for CityPulse (top) and AirDelhi without
-retraining (bottom). Error bars are 95\% confidence intervals over 30 paired runs.}
-\label{fig:main}
-\end{figure*}
-
-\subsection{Real data without retraining}
-AirDelhi is harder for the baseline: its arrivals are bursty and its clusters are unevenly loaded, so the
-CityPulse-trained EdgePlus policy completes 98.8\%, 89.3\% and 73.0\% of tasks on time at the three loads.
-With both rules the same policy reaches 99.8\%, 98.8\% and 96.5\%. URLLC misses fall from 38.6\% to 0.97\% at
-100{,}000 tasks and from 73.0\% to 3.7\% at 150{,}000. Energy per task falls by 11.2\%, 5.5\% and 7.3\%. The
-rules contain no learned parameters, so they carry over to a new city unchanged, while the policy itself
-faces a shift in task locations and arrival patterns.
-
-\subsection{Ablations}
-Table~\ref{tab:ablation} isolates each design choice at the heaviest CityPulse load. Dropping late tasks under
-FCFS raises on-time completion to 91.2\% but still misses 40.3\% of URLLC tasks and drops 8.8\% of all
-tasks. EDF without dropping reaches 97.4\%. We do not observe the domino collapse described for EDF under
-overload \cite{buttazzo2011}, probably because the mask steers new tasks away from servers with long queues,
-but EDF alone leaves 4.2\% of eMBB and 1.4\% of mMTC tasks late. Fixed class priority protects URLLC (0.11\% misses) but leaves 10.1\% of mMTC
-tasks late. Deadline-first order with dropping gives the best result (99.6\%). For DVFS, the unguarded rule
-saves 28.1\% energy at 50{,}000 tasks but collapses at higher load (66.0\% on time at 100{,}000 and 46.0\% at
-150{,}000), because slowed tasks delay urgent tasks that arrive later. The guard keeps the on-time rate
-within one point of the baseline at every load on both datasets while still saving energy.
-
-\begin{table}[t]
-\caption{Ablations, CityPulse at 150{,}000 tasks. On-time and misses in \%, $L_{p95}$ in s, energy in mJ
-per task.}
-\label{tab:ablation}
-\centering
-\setlength{\tabcolsep}{3pt}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lrrrrrr}
-\toprule
- & & \multicolumn{3}{c}{Missed} & & \\
-\cmidrule(lr){3-5}
-Rules & On-time & URLLC & eMBB & mMTC & $L_{p95}$ & Energy\\
-\midrule
-EdgePlus (FCFS) & 80.52 & 55.36 & 16.80 & 0.03 & 148.1 & 28.36\\
-FCFS + drop & 91.24 & 40.33 & 1.39 & 0.00 & 86.7 & 26.46\\
-EDF, keep & 97.41 & 0.32 & 4.24 & 1.37 & 298.0 & 28.29\\
-Class priority + drop & 96.49 & 0.11 & 0.89 & 10.14 & 171.0 & 27.35\\
-EDF + drop & 99.64 & 0.07 & 0.65 & 0.05 & 290.6 & 28.07\\
-Unguarded DVFS & 45.96 & 80.11 & 67.55 & 14.16 & 637.0 & 24.48\\
-Guarded DVFS & 79.60 & 57.11 & 17.94 & 0.04 & 155.1 & 27.11\\
-Both (ours) & \textbf{99.65} & 0.07 & 0.64 & 0.05 & 298.4 & 26.88\\
-\bottomrule
-\end{tabular}}
-\end{table}
-
-\subsection{Latency trade-off and overhead}
-Deadline-first order moves waiting time from urgent tasks to tasks with long deadlines (Fig.~\ref{fig:lat}).
-At 150{,}000 CityPulse tasks, the 95th-percentile latency of URLLC tasks falls from 92.3\,s to 6.2\,s and the
-median latency of all tasks from 28.0\,s to 6.0\,s, but the 95th percentile of all tasks rises from 148\,s to
-298\,s and that of mMTC tasks from 223\,s to 439\,s, still within their deadlines (0.05\% missed). Because
-deadlines span 5 to 600\,s, a single latency percentile over all classes hides this; we recommend reporting
-latency per class. On AirDelhi at 150{,}000 tasks the overall 95th percentile does not change significantly
-(339\,s vs 316\,s, $p=0.74$), and at 100{,}000 it rises from 110\,s to 155\,s.
-
-The rules are cheap: a whole simulated episode, including the simulator itself, takes 0.23\,ms per task with
-the baseline rules and 0.30\,ms with ours on one CPU core at 150{,}000 tasks.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{figures/latency_brasov.png}
-\caption{95th-percentile latency by class, CityPulse at 150{,}000 tasks. URLLC tasks finish much sooner;
-mMTC tasks wait longer but stay within their 120--600\,s deadlines.}
-\label{fig:lat}
+\includegraphics[width=\textwidth]{figures/topology.png}
+\caption{The two simulated cities. Coloured dots are sensor locations (left) or bus positions (right), coloured
+by cluster; numbers are cluster IDs; dashed lines join neighbouring clusters. Both cities use the same server
+inventory, but tasks are spread very unevenly: the busiest cluster receives about 20\% of all tasks in both
+cities, and the quietest only 2--4\%.}
+\label{fig:topology}
 \end{figure}
 
-\section{Discussion and Limitations}
-Our results come from a simulator, and the size of the gains depends on its modeling choices: servers are
-multi-core nodes simulated event by event, the mask estimates waits from the real backlog rather than
-EdgePlus's queue formula, PSO, the cryptographic path and CBS--D* Lite are not implemented, and only three
-training seeds per load were used. We calibrated the simulator against the published on-time rates, but the
-medium load on CityPulse is much lighter than in the paper (Table~\ref{tab:fidelity}). CityPulse values are
-generated, so the AirDelhi results are the closer test of real arrival patterns; there we only evaluated
-policies trained on CityPulse. Dropping assumes that a late result has no value; where late mMTC results are
-still useful, dropping can be limited to URLLC and eMBB. The energy model assumes a 25\% static share and
-frequency levels down to half speed, and does not include idle power or sleep states, which could add
-further savings at light load. Finally, the higher overall tail latency is a real cost for applications that
-care about absolute delay rather than deadlines.
+\subsection{The two datasets}
+Table~\ref{tab:datasets} compares the two datasets.
 
+\textbf{CityPulse} \cite{citypulse} is the dataset that EdgePlus calls the Bra\c{s}ov air-pollution traces: 449
+sensor sites reporting five pollution values every five minutes from 1 August to 1 October 2014, 7.89 million
+readings in total. Two details are worth knowing. The download file on the CityPulse website is named after the
+city of Aarhus, and CityPulse describes the values as \emph{generated}: they follow a bounded random walk rather
+than real measurements. Also, all sites report at the same moments; we spread each site's reports over its
+five-minute interval, and tasks then arrive at a perfectly steady rate.
+
+\textbf{AirDelhi} \cite{airdelhi2023} is real measured data, released by IIT Delhi in 2023: low-cost particulate
+matter (PM$_1$, PM$_{2.5}$, PM$_{10}$) sensors mounted on 13 public buses, recording every 3 seconds together with
+GPS position. We use December 2020 and January 2021. We removed readings with impossible positions or values,
+and readings taken while a bus was standing still (it moved less than 50\,m in about 3 minutes). Without this
+step, 38\% of all readings came from just three 1\,km$^2$ squares, mostly from buses standing still, probably at
+depots. This left 4.04 million readings. Because buses move between areas and their activity changes through the
+day, AirDelhi tasks arrive in strong bursts (Figure~\ref{fig:workload}).
+
+\begin{table}[H]
+\centering
+\caption{The two datasets.}
+\label{tab:datasets}
+\small
+\begin{tabularx}{\textwidth}{lLL}
+\toprule
+ & CityPulse (EdgePlus's ``Bra\c{s}ov'') & AirDelhi\\
+\midrule
+Source & CityPulse project, University of Surrey & IIT Delhi, NeurIPS 2023 Datasets track\\
+Sensors & 449 fixed sites (208 distinct locations) & 13 sensors on public buses\\
+Period used & 1 Aug -- 1 Oct 2014 & 1 Dec 2020 -- 30 Jan 2021\\
+Values & 5 pollution indices (ozone, particles, CO, SO$_2$, NO$_2$) & PM$_{2.5}$ and PM$_{10}$ concentrations\\
+Real or generated & generated (bounded random walk) & real measurements\\
+Readings used & 7.89 million & 4.04 million (after removing parked-bus readings)\\
+Training / test split & first 43 days / last 18 days & December / January\\
+Arrival pattern & perfectly steady & bursty: from 6 to 455 tasks per second at heavy load\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{From sensor readings to tasks}
+Following EdgePlus's labelling procedure, every reading becomes one task:
+\begin{enumerate}
+\item \textbf{Severity.} For each pollutant we measure how unusual the reading is compared with the training
+period (a robust z-score), and how fast it is rising. The severity of the reading is its most unusual pollutant
+plus half of its fastest rise.
+\item \textbf{Class.} Within each episode, the 20\% most severe readings become URLLC tasks, the next 50\% eMBB and
+the remaining 30\% mMTC, matching EdgePlus.
+\item \textbf{Deadline.} Drawn at random from the class's range in Table~\ref{tab:classes}.
+\item \textbf{Size.} The CPU work is drawn around the class average, a little higher for more severe readings.
+\item \textbf{Home cluster.} The cluster whose centre is closest to the sensor (or to the bus at that moment).
+\item \textbf{Arrival time.} An episode takes $N$ consecutive readings and squeezes their real time span into a
+10-minute window. $N$ is 50{,}000, 100{,}000 or 150{,}000, giving on average 83, 167 or 250 new tasks per second.
+At 150{,}000 tasks an episode covers about 28 hours of CityPulse data or 43 hours of AirDelhi data.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/workload.png}
+\caption{The workload. Left: new tasks per second during one heavy-load test episode; CityPulse is perfectly
+steady, AirDelhi is bursty. Right: share of all tasks coming from each cluster.}
+\label{fig:workload}
+\end{figure}
+
+\subsection{Rebuilding EdgePlus}
+We could not find public code for EdgePlus, so we rebuilt it from the paper. Table~\ref{tab:rebuild} shows what we kept and
+what we simplified. Two simplifications matter most. We left out PSO, so our baseline corresponds to the
+paper's ``EdgePlus without PSO'' variant. And we left out the encryption and blockchain machinery, but kept the
+reputation and debt signals that the ledger feeds into the scheduler; the ledger's own check takes 0.39\,ms
+according to the paper and happens after a task finishes, so it does not affect latency. All other parameter
+values are listed in Appendix~\ref{app:params}.
+
+\begin{table}[H]
+\centering
+\caption{What we rebuilt from EdgePlus. Everything here applies equally to the baseline and to our rules.}
+\label{tab:rebuild}
+\small
+\begin{tabularx}{\textwidth}{lL}
+\toprule
+EdgePlus part & In our rebuild\\
+\midrule
+Feasibility mask, routing order, slices & Kept: deadline, memory, battery, slice budget and URLLC reputation checks\\
+PPO actor and centralised critic & Kept: one actor network shared by all clusters that scores each candidate
+server; a critic that sees the whole city\\
+Advisory layer (Nash, PID, leader) & Kept, with EdgePlus's PID settings (1.90, 1.20, 0.06)\\
+Reward & Kept: on-time bonus, late penalty, latency, energy, cloud, reputation and debt terms\\
+Reputation and debt from the ledger & Kept as signals; the blockchain itself is not simulated\\
+Waiting-time estimate & Uses the server's real queue instead of Kingman's formula (more accurate for the
+baseline too)\\
+Servers & Multi-core servers, simulated task by task\\
+Mobile server paths & Straight line $\times$ 1.3 (instead of CBS--D* Lite path planning)\\
+PSO outer loop & Not included (baseline = EdgePlus without PSO)\\
+Encryption, signatures, security tests & Not included (no effect on scheduling)\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+We calibrated one number: the number of cores per stationary server. We chose 24 because the trained EdgePlus
+model then comes close to the paper's heavy-load result (80.5\% on time against 82.0\%), while every task is on
+time at light load, as in the paper.
+
+\subsection{Training the EdgePlus model}
+We trained one EdgePlus model for each load and each of 3 random seeds (9 models). Each model trained for 60
+rounds; in each round it simulated one full training episode, collected one decision per task, and updated its
+networks with PPO. Training took 25, 45 and 61 minutes per model on one CPU core at the three loads, 6.6
+CPU-hours in total. No graphics card was needed, because the networks are small and the simulator does most of
+the work.
+
+Figure~\ref{fig:training} shows learning. At light and medium load the model quickly reaches almost 100\% on
+time. At heavy load the on-time rate during training climbs from about 74.6\% in the first ten rounds to 79.4\%
+in the last ten. (During training the model tries random choices on purpose, so its score is lower than in the
+tests, where it always takes its best choice.) The spikes come from training episodes that happened to be
+easier. As a check that learning helped, the trained model beats a simple non-learning scheduler at heavy load by
+8.5 points (80.5\% against 72.0\% on time).
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.72\textwidth]{figures/training.png}
+\caption{Training the EdgePlus model: share of tasks on time in each training round (line: average of 3 seeds;
+shaded: range).}
+\label{fig:training}
+\end{figure}
+
+\subsection{The experiments}
+Each of the 9 trained models was tested on 10 test episodes taken from the test period of the data, giving 30
+runs per setting. In every test we ran the same model with the different server rules listed in
+Table~\ref{tab:variants}. For AirDelhi we used the models trained on CityPulse without retraining them, which
+also tests how well everything carries over to a new city with real data. Table~\ref{tab:metrics} explains the
+measurements.
+
+\begin{table}[H]
+\centering
+\caption{The server rule sets we compared. The first is EdgePlus as published; the last is our full method.}
+\label{tab:variants}
+\small
+\begin{tabularx}{\textwidth}{lccL}
+\toprule
+Name & Queue order & Late tasks & CPU speed\\
+\midrule
+EdgePlus (baseline) & FCFS & kept & always full speed\\
+Drop late tasks only & FCFS & dropped & always full speed\\
+Deadline first only & EDF & kept & always full speed\\
+Fixed class priority + drop & URLLC, then eMBB, then mMTC & dropped & always full speed\\
+Rule 1: deadline first + drop & EDF & dropped & always full speed\\
+Unguarded slow-down & FCFS & kept & slowed whenever the task has slack\\
+Rule 2: guarded slow-down & FCFS & kept & guarded DVFS (Section~\ref{sec:rule2})\\
+Both rules (ours) & EDF & dropped & guarded DVFS\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{What we measure.}
+\label{tab:metrics}
+\small
+\begin{tabularx}{\textwidth}{lL}
+\toprule
+Measurement & Meaning\\
+\midrule
+On time (\%) & Share of all tasks that finished before their deadline. Dropped tasks count as missed.\\
+Missed (\%) per class & Share of URLLC, eMBB or mMTC tasks that missed their deadline.\\
+Median latency & Half of the finished tasks took less than this.\\
+95th-percentile latency & 95\% of the finished tasks took less than this; a measure of the slowest tasks.\\
+Energy per task & Average energy used per task, in millijoules (mJ), including transmission and computing.\\
+Cloud share & Share of tasks sent to the cloud.\\
+Dropped (\%) & Share of tasks dropped by Rule 1 (already included in ``missed'').\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%=====================================================================================================
+\section{Results}
+\label{sec:results}
+%=====================================================================================================
+
+\subsection{Is our EdgePlus close to the original?}
+Before improving EdgePlus we checked that our rebuild behaves like the original (Table~\ref{tab:fidelity}). At
+light load both reach 100\% on time with latencies of a few seconds. At heavy load ours reaches 80.5\% on time
+against 82.0\% for the published EdgePlus without PSO, with nearly the same 95th-percentile latency (148\,s
+against 147--159\,s). Our median latency and cloud share are lower. The one clear difference is the medium load,
+where the paper reports 82.5\% and we measure 99.9\%. The steady arrivals of the CityPulse data leave the servers
+far from full at medium load in our simulator. AirDelhi, whose arrivals are bursty, does produce a congested
+medium load, so it covers this case.
+
+\begin{table}[H]
+\centering
+\caption{Our rebuilt EdgePlus against the published numbers (CityPulse data).}
+\label{tab:fidelity}
+\small
+\begin{tabular}{llrrrr}
+\toprule
+Load & Source & On time (\%) & Median (s) & 95th pct (s) & Cloud (\%)\\
+\midrule
+50{,}000 & EdgePlus paper & 100.00 & 3.98 & 10.24 & --\\
+ & our rebuild & 100.00 & 3.55 & 7.35 & 0.00\\
+\midrule
+100{,}000 & EdgePlus paper & 82.50 & -- & about 151 & --\\
+ & our rebuild & 99.87 & 4.20 & 11.79 & 0.09\\
+\midrule
+150{,}000 & EdgePlus paper & 82.77 & 53.23 & 147.09 & 6.1\\
+ & EdgePlus paper, without PSO & 82.0 & 54.8 & 158.9 & 6.6\\
+ & our rebuild (without PSO) & 80.52 & 27.95 & 148.10 & 3.78\\
+ & simple scheduler, no learning & 71.99 & 38.39 & 125.01 & 3.79\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Main result on CityPulse}
+Table~\ref{tab:main_cp} and Figure~\ref{fig:main_cp} compare EdgePlus with our rules on the dataset used by the
+EdgePlus authors.
+
+At \textbf{heavy load}, Rule~1 raises the share of tasks on time from 80.5\% to 99.6\%. Missed URLLC tasks fall
+from 55.4\% to 0.07\% and missed eMBB tasks from 16.8\% to 0.65\%, while mMTC tasks stay almost perfect (0.05\%
+missed). Only 0.36\% of tasks are dropped. The median latency drops from 28\,s to under 6\,s. In other words, the
+servers had enough capacity all along; under FCFS they were spending it on the wrong tasks first.
+
+At \textbf{light load}, every task is on time with or without our rules, so Rule~1 has nothing to fix. Here
+Rule~2 does the work: energy per task falls from 27.04\,mJ to 21.69\,mJ, a saving of 19.8\%. The saving shrinks as
+load grows (10.0\% at medium, 5.2\% at heavy load) because busy servers rarely have an empty queue, which is when
+Rule~2 is allowed to act. The cost at light load is about one extra second of latency (median 3.6\,s to 4.7\,s),
+well within every deadline.
+
+\begin{table}[H]
+\centering
+\caption{CityPulse: EdgePlus with and without our rules (average of 30 runs; the 95\% confidence intervals are
+small, for example $\pm0.50$ for EdgePlus's 80.52\% and $\pm0.10$ for our 99.65\%).}
+\label{tab:main_cp}
+\small
+\begin{tabular}{llrrrrrrr}
+\toprule
+ & & On time & \multicolumn{3}{c}{Missed (\%)} & Median & 95th pct & Energy\\
+\cmidrule(lr){4-6}
+Load & Rules & (\%) & URLLC & eMBB & mMTC & latency (s) & latency (s) & (mJ/task)\\
+\midrule
+\multirow{4}{*}{50{,}000} & EdgePlus & 100.00 & 0.00 & 0.00 & 0.00 & 3.55 & 7.35 & 27.04\\
+ & + Rule 1 & 100.00 & 0.00 & 0.00 & 0.00 & 3.55 & 7.35 & 27.04\\
+ & + Rule 2 & 99.99 & 0.04 & 0.00 & 0.00 & 4.73 & 8.24 & 21.76\\
+ & + both (ours) & 100.00 & 0.01 & 0.00 & 0.00 & 4.72 & 8.19 & \textbf{21.69}\\
+\midrule
+\multirow{4}{*}{100{,}000} & EdgePlus & 99.87 & 0.66 & 0.00 & 0.00 & 4.20 & 11.79 & 27.61\\
+ & + Rule 1 & 99.99 & 0.04 & 0.00 & 0.00 & 3.82 & 9.72 & 27.59\\
+ & + Rule 2 & 99.84 & 0.79 & 0.00 & 0.00 & 5.05 & 12.39 & 24.83\\
+ & + both (ours) & \textbf{99.99} & 0.04 & 0.00 & 0.00 & 4.59 & 10.48 & \textbf{24.86}\\
+\midrule
+\multirow{4}{*}{150{,}000} & EdgePlus & 80.52 & 55.36 & 16.80 & 0.03 & 27.95 & 148.10 & 28.36\\
+ & + Rule 1 & 99.64 & 0.07 & 0.65 & 0.05 & 5.46 & 290.63 & 28.07\\
+ & + Rule 2 & 79.60 & 57.11 & 17.94 & 0.04 & 29.81 & 155.12 & 27.11\\
+ & + both (ours) & \textbf{99.65} & 0.07 & 0.64 & 0.05 & 5.99 & 298.37 & \textbf{26.88}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/main_brasov.png}
+\caption{CityPulse: share of tasks on time, missed URLLC tasks and energy per task at the three loads. Error bars
+are 95\% confidence intervals.}
+\label{fig:main_cp}
+\end{figure}
+
+\subsection{Main result on real Delhi data}
+AirDelhi is a harder test (Table~\ref{tab:main_dl}, Figure~\ref{fig:main_dl}). Its bursts overload some clusters
+for minutes at a time, and the EdgePlus models were trained on CityPulse and never saw Delhi. EdgePlus finishes
+98.8\%, 89.3\% and 73.0\% of tasks on time at the three loads. With both rules the same models reach 99.8\%,
+98.8\% and 96.5\%. Missed URLLC tasks fall from 38.6\% to 0.97\% at medium load and from 73.0\% to 3.7\% at heavy
+load, and energy per task falls by 11.2\%, 5.5\% and 7.3\%. Our rules contain nothing learned, so they carry over
+to a new city unchanged.
+
+\begin{table}[H]
+\centering
+\caption{AirDelhi (models trained on CityPulse, not retrained): EdgePlus with and without our rules (average of
+30 runs).}
+\label{tab:main_dl}
+\small
+\begin{tabular}{llrrrrrrr}
+\toprule
+ & & On time & \multicolumn{3}{c}{Missed (\%)} & Median & 95th pct & Energy\\
+\cmidrule(lr){4-6}
+Load & Rules & (\%) & URLLC & eMBB & mMTC & latency (s) & latency (s) & (mJ/task)\\
+\midrule
+\multirow{4}{*}{50{,}000} & EdgePlus & 98.75 & 5.76 & 0.19 & 0.00 & 4.38 & 25.26 & 24.03\\
+ & + Rule 1 & 99.85 & 0.16 & 0.24 & 0.00 & 3.71 & 26.74 & 23.89\\
+ & + Rule 2 & 98.58 & 6.54 & 0.22 & 0.00 & 5.42 & 26.21 & 21.61\\
+ & + both (ours) & \textbf{99.84} & 0.17 & 0.25 & 0.00 & 4.66 & 28.37 & \textbf{21.33}\\
+\midrule
+\multirow{4}{*}{100{,}000} & EdgePlus & 89.26 & 38.58 & 5.98 & 0.11 & 13.28 & 109.55 & 24.60\\
+ & + Rule 1 & 98.74 & 0.95 & 1.55 & 0.99 & 6.39 & 153.86 & 23.96\\
+ & + Rule 2 & 88.84 & 40.57 & 6.03 & 0.13 & 14.07 & 109.86 & 23.87\\
+ & + both (ours) & \textbf{98.78} & 0.97 & 1.50 & 0.94 & 7.10 & 154.95 & \textbf{23.24}\\
+\midrule
+\multirow{4}{*}{150{,}000} & EdgePlus & 72.97 & 72.96 & 24.43 & 0.76 & 38.99 & 338.80 & 25.04\\
+ & + Rule 1 & 96.54 & 3.55 & 3.97 & 2.57 & 15.75 & 316.50 & 23.56\\
+ & + Rule 2 & 72.35 & 74.97 & 24.84 & 0.80 & 39.91 & 341.52 & 24.76\\
+ & + both (ours) & \textbf{96.47} & 3.68 & 4.04 & 2.59 & 16.86 & 316.13 & \textbf{23.21}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/main_delhi.png}
+\caption{AirDelhi (models trained on CityPulse): share of tasks on time, missed URLLC tasks and energy per task.
+Error bars are 95\% confidence intervals.}
+\label{fig:main_dl}
+\end{figure}
+
+\subsection{Which part of the method does what?}
+\label{sec:ablation}
+To see why the method works, we switched its parts on and off one at a time at the heaviest CityPulse load
+(Table~\ref{tab:ablation}, Figure~\ref{fig:ablation}).
+
+\begin{itemize}
+\item \textbf{Dropping alone} (still FCFS) raises the on-time share to 91.2\%, but 40.3\% of URLLC tasks still miss
+and 8.8\% of all tasks are dropped. Without deadline order, urgent tasks reach the front of the queue too late
+and are then dropped.
+\item \textbf{Deadline order alone} (no dropping) reaches 97.4\%. In the full city we did not see the dramatic
+domino effect of worked example~1, probably because EdgePlus's mask already steers new tasks away from servers
+with long queues. Still, without dropping, 4.2\% of eMBB and 1.4\% of mMTC tasks miss.
+\item \textbf{Fixed class priority} (URLLC first, then eMBB, then mMTC, with dropping) protects URLLC tasks
+(0.11\% missed) but leaves 10.1\% of mMTC tasks late: a relaxed task never gets ahead of an urgent one, even when
+its own deadline is about to pass. Deadlines make a better priority than fixed classes.
+\item \textbf{Deadline order with dropping} (Rule~1) gives the best on-time share, 99.6\%.
+\item \textbf{Unguarded slow-down} is a disaster: only 46.0\% on time at heavy load (and 66.0\% at medium load),
+because slowed tasks block cores that urgent tasks need. It saves the most energy at light load (28.1\%), but at
+too high a price.
+\item \textbf{Guarded slow-down} (Rule~2) keeps the on-time share within one point of EdgePlus at every load, on
+both datasets, while saving energy.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Switching the parts of the method on and off (CityPulse, 150{,}000 tasks, average of 30 runs).}
+\label{tab:ablation}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+ & On time & \multicolumn{3}{c}{Missed (\%)} & 95th pct & Energy\\
+\cmidrule(lr){3-5}
+Rules & (\%) & URLLC & eMBB & mMTC & latency (s) & (mJ/task)\\
+\midrule
+EdgePlus (FCFS, keep late tasks) & 80.52 & 55.36 & 16.80 & 0.03 & 148.1 & 28.36\\
+Drop late tasks only & 91.24 & 40.33 & 1.39 & 0.00 & 86.7 & 26.46\\
+Deadline first only & 97.41 & 0.32 & 4.24 & 1.37 & 298.0 & 28.29\\
+Fixed class priority + drop & 96.49 & 0.11 & 0.89 & 10.14 & 171.0 & 27.35\\
+Rule 1: deadline first + drop & 99.64 & 0.07 & 0.65 & 0.05 & 290.6 & 28.07\\
+Unguarded slow-down & 45.96 & 80.11 & 67.55 & 14.16 & 637.0 & 24.48\\
+Rule 2: guarded slow-down & 79.60 & 57.11 & 17.94 & 0.04 & 155.1 & 27.11\\
+Both rules (ours) & \textbf{99.65} & 0.07 & 0.64 & 0.05 & 298.4 & 26.88\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/ablation.png}
+\caption{The parts of the method, CityPulse at 150{,}000 tasks. Left: share of tasks on time. Right: missed
+deadlines per class.}
+\label{fig:ablation}
+\end{figure}
+
+\subsection{What happens during an episode}
+Figure~\ref{fig:overtime} follows one heavy-load test episode over its 10 minutes and shows the on-time share of
+tasks grouped by when they arrived. On CityPulse, EdgePlus starts well, but its queues grow steadily in the busy
+clusters, and by the end of the window only about 60\% of new tasks finish on time. With our rules the share stays
+near 99\% throughout. On AirDelhi, EdgePlus collapses during each burst, down to about 9\% at the worst moment,
+and recovers in between. With our rules the bursts still hurt, but the on-time share stays above 83\% at all
+times. In this particular episode the totals are 60.7\% for EdgePlus and 93.9\% for our rules.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/over_time.png}
+\caption{On-time share of tasks by arrival time (20-second groups) in one heavy-load test episode.}
+\label{fig:overtime}
+\end{figure}
+
+\subsection{Which parts of the city benefit}
+Figure~\ref{fig:cluster} breaks the same episodes down by cluster. Quiet clusters were already fine. The gains are
+in the busy clusters. On CityPulse, cluster~4, which receives 20\% of all tasks, goes from 60.0\% to 98.0\% on time,
+and cluster~8 from 66.4\% to 99.2\%. On AirDelhi the busiest clusters 0, 2 and 6 go from about 45\% to 88--94\%.
+The city as a whole also becomes fairer: no area is left far behind.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/per_cluster.png}
+\caption{On-time share per cluster in one heavy-load test episode. The white number on each bar is the cluster's
+share of all tasks.}
+\label{fig:cluster}
+\end{figure}
+
+\subsection{The price: relaxed tasks wait longer}
+Our rules are not free. Deadline order moves waiting time from urgent tasks to relaxed ones
+(Figure~\ref{fig:latclass}). On CityPulse at heavy load, the 95th-percentile latency of URLLC tasks falls from 92\,s
+to 6\,s and that of eMBB tasks from 105\,s to 87\,s, but that of mMTC tasks rises from 223\,s to 439\,s. Because
+mMTC tasks are 30\% of all tasks, the 95th-percentile latency of all tasks together rises from 148\,s to 298\,s.
+These relaxed tasks still meet their deadlines of 120--600\,s: only 0.05\% of them miss.
+
+Figure~\ref{fig:cdf} shows the full picture for each class. With our rules almost every URLLC task is done within
+its 5--15\,s window, and far more eMBB tasks finish early, while mMTC tasks are deliberately pushed later, though
+still inside their window. On AirDelhi the overall 95th-percentile latency at heavy load does not change
+significantly (339\,s against 316\,s), and at medium load it rises from 110\,s to 155\,s.
+
+The lesson is that a single latency number over all classes can be misleading when deadlines range from 5 to
+600 seconds. A system that finishes a logging task in 400 seconds instead of 200 has lost nothing if the deadline
+is 600 seconds. Latency is best reported per class, next to the share of deadlines met.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/latency_by_class.png}
+\caption{95th-percentile latency by class at heavy load (average of 30 runs).}
+\label{fig:latclass}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/latency_cdf.png}
+\caption{How quickly tasks of each class finish (CityPulse, one heavy-load test episode). A curve that rises
+further to the left means faster. The grey band is the class's deadline range.}
+\label{fig:cdf}
+\end{figure}
+
+\subsection{Energy savings in detail}
+Figure~\ref{fig:energy} shows how the energy saving depends on load. The saving comes almost entirely from Rule~2
+on CityPulse (dashed and solid blue lines overlap). Rule~2 slows down 97.8\% of tasks at light load but only 21.9\%
+at heavy load, because a busy server rarely has an empty queue. On AirDelhi the combination saves more than
+Rule~2 alone at medium and heavy load (5.5\% against 2.9\%, and 7.3\% against 1.1\%): Rule~1 also saves energy,
+because it does not spend CPU time on tasks that are already lost.
+
+Figure~\ref{fig:speeds} shows which speeds the rule actually picks. At light load most tasks run at 70--80\% of
+full speed, and almost none at full speed. At heavy load, 74\% of tasks still run at full speed. The rule
+naturally backs off when the city is busy.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/energy_savings.png}
+\caption{Left: energy saved per task compared with EdgePlus. Right: share of tasks run below full speed.}
+\label{fig:energy}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.68\textwidth]{figures/speeds.png}
+\caption{CPU speeds chosen by the guarded rule in one CityPulse test episode at light and heavy load.}
+\label{fig:speeds}
+\end{figure}
+
+\subsection{Are the differences real?}
+Table~\ref{tab:stats} gives the paired statistical tests for our full method against EdgePlus. Every difference
+in on-time share and energy is statistically significant. The tests are worth reading carefully at light
+CityPulse load: there our rules lower the on-time share by 0.002 points, about two tasks in 100{,}000. The test
+correctly says this difference is real, but it is far too small to matter in practice.
+
+\begin{table}[H]
+\centering
+\caption{Paired tests of our full method against EdgePlus (30 pairs each, Wilcoxon signed-rank test,
+Benjamini--Hochberg adjusted p-values). A p-value below 0.05 means the difference is very unlikely to be luck.}
+\label{tab:stats}
+\small
+\begin{tabular}{llrlrlrl}
+\toprule
+Data & Load & \multicolumn{2}{c}{On time} & \multicolumn{2}{c}{Energy per task} & \multicolumn{2}{c}{95th-pct latency}\\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+ & & change & p & change & p & change & p\\
+\midrule
+CityPulse & 50{,}000 & $-$0.002 pts & 0.0005 & $-$19.8\% & $<$0.0001 & +0.8\,s & $<$0.0001\\
+ & 100{,}000 & +0.12 pts & $<$0.0001 & $-$10.0\% & $<$0.0001 & $-$1.3\,s & $<$0.0001\\
+ & 150{,}000 & +19.13 pts & $<$0.0001 & $-$5.2\% & $<$0.0001 & +150.3\,s & $<$0.0001\\
+AirDelhi & 50{,}000 & +1.09 pts & $<$0.0001 & $-$11.2\% & $<$0.0001 & +3.1\,s & $<$0.0001\\
+ & 100{,}000 & +9.51 pts & $<$0.0001 & $-$5.5\% & $<$0.0001 & +45.4\,s & $<$0.0001\\
+ & 150{,}000 & +23.50 pts & $<$0.0001 & $-$7.3\% & $<$0.0001 & $-$22.7\,s & 0.74\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Do the rules need a learned scheduler?}
+Finally, we applied the same rules to the simple, non-learning scheduler from Section~\ref{sec:setup}, which sends
+each task to the first server in routing order that can finish it in time. On CityPulse at heavy load the rules
+raise it from 72.0\% to 98.8\% on time, and at light load they cut its energy per task by 10.7\%. So the rules
+help on their own, but the best results come from combining them with the learned EdgePlus policy (99.7\% on
+time). The learned policy and the server rules solve different parts of the problem: one picks the right server,
+the other uses that server well.
+
+%=====================================================================================================
+\section{Discussion}
+\label{sec:discussion}
+%=====================================================================================================
+
+\subsection{What this means in practice}
+\begin{enumerate}
+\item \textbf{Choosing a good server is not enough.} Even a strong learned scheduler loses many urgent tasks if
+servers then work through their queues in arrival order. The order inside the server matters as much as the
+choice of server.
+\item \textbf{Use deadlines as priorities, and drop lost causes.} Deadline order protects urgent tasks without
+starving relaxed ones, and dropping hopeless tasks frees time for tasks that can still be saved.
+\item \textbf{Save energy only when it is safe.} Slowing the CPU is a cheap way to save energy, but only when no
+other work is waiting, and only by a bounded amount.
+\item \textbf{Report results per class.} Overall numbers hid the fact that all of EdgePlus's misses were urgent and
+routine tasks (57\% and 43\% of the misses at heavy load), while relaxed tasks almost never missed.
+\end{enumerate}
+
+\subsection{Limitations}
+We want to be clear about what our results do and do not show.
+\begin{itemize}
+\item All results come from a simulator. We checked it against the EdgePlus paper, but the size of the gains
+depends on choices such as multi-core servers and the deadline ranges.
+\item Our EdgePlus rebuild leaves out PSO, the security layer and the original path planner, and uses three
+training seeds per load. At medium load it is much less congested than the original on CityPulse.
+\item CityPulse values are generated, not measured. AirDelhi is real, but we only tested models trained on
+CityPulse there; training directly on Delhi data might change the baseline.
+\item Dropping assumes a late result is worthless. If late logging results are still useful, dropping could be
+limited to URLLC and eMBB tasks.
+\item Our energy model uses a 25\% static share and speeds down to half; it does not include idle power or sleep
+modes, which could save more at light load.
+\item Relaxed tasks wait longer. Applications that care about absolute delay rather than deadlines may not want
+this trade-off.
+\end{itemize}
+
+\subsection{Future work}
+Natural next steps are to retrain EdgePlus with the rules switched on, so that it learns to make use of them; to
+train and test on real data from more cities; to add idle power and sleep modes to the energy model; and to
+bring back the PSO outer loop for a complete comparison with the original system.
+
+%=====================================================================================================
 \section{Conclusion}
-Adding two slack-aware rules to EdgePlus's servers, deadline-first queueing with dropping and guarded DVFS,
-substantially raises on-time completion under heavy load (80.5\% to 99.7\% on CityPulse, 73.0\% to 96.5\% on
-AirDelhi at 150{,}000 tasks) and lowers energy per task by up to 19.8\% at light load, using the same trained
-policy and no retraining. The ablations show that the details matter: deadline-first order works best together with dropping, deadlines work
-better than fixed class priorities, and DVFS needs a guard. Future work includes training the policy with the
-rules in place, training on AirDelhi directly, adding idle and sleep power, and restoring the PSO outer loop.
+%=====================================================================================================
 
-\section*{Acknowledgment}
-The authors used an AI coding assistant to help implement the simulator and draft this manuscript. All
-results were produced by the released code.
+EdgePlus decides which server should run each task in a 6G edge network, but treats all tasks the same once they
+reach a server. We added two simple rules inside each server: run the task with the earliest deadline first and
+drop tasks that can no longer make it, and slow the CPU down only when nothing else is waiting and only by a
+bounded amount. With the same trained EdgePlus model, these rules raise the share of tasks finished on time at
+heavy load from 80.5\% to 99.7\% on the CityPulse data and from 73.0\% to 96.5\% on real data from Delhi, and cut
+energy per task by up to 19.8\% at light load. The price is a longer, but still on-time, wait for relaxed tasks.
+The experiments also show why each detail matters: deadline order works best together with dropping, deadlines
+make better priorities than fixed classes, and slowing down the CPU needs a guard.
+
+\section*{Code and data availability}
+The simulator, the trained models, all raw results and the scripts that produce every table and figure in this
+paper are available in the project repository. CityPulse and AirDelhi are public datasets; AirDelhi is released
+under the CC BY 4.0 licence.
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}
+
+\appendix
+\section{All simulation parameters}
+\label{app:params}
+
+\begin{table}[h]
+\centering
+\caption{Parameters of the simulator and of training. Values marked $^\dagger$ come from the EdgePlus paper.}
+\small
+\begin{tabularx}{\textwidth}{lL}
+\toprule
+Parameter & Value\\
+\midrule
+City & 10\,km $\times$ 10\,km$^\dagger$, 10 clusters$^\dagger$, weighted K-means and Delaunay neighbours$^\dagger$\\
+Task classes & URLLC / eMBB / mMTC = 20 / 50 / 30\%$^\dagger$; deadlines 5--15, 30--120, 120--600\,s$^\dagger$\\
+CPU work per task & averages 6 / 12 / 9 Gcycles; spread $\sigma=0.47$ (log-normal); about 16\% more per unit of severity\\
+Data per task & 2 / 8 / 1\,KB; memory 64 / 128 / 32\,MB\\
+Loads & 50{,}000 / 100{,}000 / 150{,}000 tasks in a 600\,s window$^\dagger$\\
+Radio & 20 / 50 / 5\,MHz per class; frequency reuse 3; 23\,dBm power + 20\,dB antenna gain; path loss
+$128.1 + 37.6\log_{10} d$ (d in km) \cite{3gpp36814}; MAC efficiency 0.7; overhead 1.2\\
+Slices & 25 / 65 / 35\% of a cluster's cores reserved per class over a 60\,s window\\
+Energy & 2.2 / 2.8 / 1.8\,mJ per Gcycle (stationary / mobile / cloud) at full speed; 25\% static; device radio 0.2\,W;
+4\,mJ per task sent to the cloud; 0.02\,mJ per metre driven\\
+Rule 2 & speeds 50--100\% in steps of 10\%; at most 80\% of the slack and 1.5\,s extra\\
+Ledger signals & reputation: moving average of on-time results (weight 0.05); threshold 0.6$^\dagger$; URLLC avoids
+servers below 0.4; debt target 0.9\\
+Advisory & bonus weights: Nash 0.5, PID 0.5, leader 0.3; PID gains 1.90 / 1.20 / 0.06$^\dagger$; set point 80\%;
+mobile servers move every 20\,s\\
+Reward & weights 1, 1, 0.2, 0.1, 0.2, 0.5, 0.5 for on time, late, latency, energy, cloud, reputation, debt; class
+weights 3 / 1.5 / 1\\
+PPO & 60 rounds; discount 0.95; GAE 0.9 \cite{schulman2016gae}; clip 0.2; 4 passes per round; batches of 4096;
+learning rate 0.0003; entropy bonus 0.01\\
+Networks & actor: 2 layers of 64 units; critic: 2 layers of 128 units; up to 16 candidate servers per decision\\
+Tests & 3 training seeds $\times$ 10 test episodes per load; models run greedily (always the best-scored server)\\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 \end{document}
