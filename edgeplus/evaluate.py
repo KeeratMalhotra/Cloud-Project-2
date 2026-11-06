@@ -52,8 +52,7 @@ def _job(args):
     else:
         pol, meta = _policy(run)
         while pending:
-            a = pol.act(sim, greedy=True)[0]
-            pending = sim.step(a)
+            pending = sim.step(pol.greedy(sim))
         train_seed, train_set = meta["seed"], meta["dataset"]
     sim.finish_episode()
     elapsed = time.time() - t0
@@ -86,24 +85,34 @@ def main():
         raise SystemExit("nothing to evaluate (no runs with policy.pt and no --heuristic-loads)")
     out = Path(args.out or ROOT / "results" / f"eval_{args.dataset}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
-    print(f"{len(jobs)} episodes to simulate with {args.workers} workers -> {out}")
+    done = set()
+    if out.exists():   # resume: skip episodes already in the file
+        with open(out) as f:
+            for r in csv.DictReader(f):
+                done.add((r["method"], r["run"], int(r["load"]), r["variant"], int(r["episode"])))
+    jobs = [j for j in jobs if (j[0], Path(j[1]).name if j[1] else "", j[2], j[3], j[4]) not in done]
+    # longest episodes first so the pool stays busy
+    jobs.sort(key=lambda j: -j[2])
+    print(f"{len(jobs)} episodes to simulate ({len(done)} already done) with {args.workers} workers -> {out}")
+    if not jobs:
+        return
     t0 = time.time()
-    rows = []
+    keys = ["method", "run", "eval_dataset", "train_dataset", "load", "train_seed", "variant", "episode"]
+    f = open(out, "a", newline="")
+    writer = None
     with Pool(args.workers, initializer=_init, initargs=(args.dataset, {})) as pool:
         for i, row in enumerate(pool.imap_unordered(_job, jobs, chunksize=1)):
-            rows.append(row)
+            if writer is None:
+                fields = keys + [k for k in row if k not in keys]
+                writer = csv.DictWriter(f, fieldnames=fields)
+                if f.tell() == 0:
+                    writer.writeheader()
+            writer.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in row.items()})
+            f.flush()
             if (i + 1) % max(1, len(jobs) // 20) == 0:
                 print(f"  {i + 1}/{len(jobs)} done ({time.time() - t0:.0f}s)", flush=True)
-    keys = ["method", "run", "eval_dataset", "train_dataset", "load", "train_seed", "variant", "episode"]
-    keys += [k for k in rows[0] if k not in keys]
-    new = not out.exists()
-    with open(out, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        if new:
-            w.writeheader()
-        for r in sorted(rows, key=lambda r: (r["method"], r["run"], r["load"], r["variant"], r["episode"])):
-            w.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()})
-    print(f"wrote {len(rows)} rows in {time.time() - t0:.0f}s")
+    f.close()
+    print(f"wrote {len(jobs)} rows in {time.time() - t0:.0f}s")
 
 
 if __name__ == "__main__":

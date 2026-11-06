@@ -134,8 +134,8 @@ def train(args):
     p = cfg["ppo"]
     updates = args.updates or p["updates"]
     torch.set_num_threads(args.threads)
-    out = Path(args.out or RUNS_DIR / f"{args.dataset}_{args.load // 1000}k_s{args.seed}"
-               + (f"_{args.variant}" if args.variant else ""))
+    name = f"{args.dataset}_{args.load // 1000}k_s{args.seed}" + (f"_{args.variant}" if args.variant else "")
+    out = Path(args.out) if args.out else RUNS_DIR / name
     out.mkdir(parents=True, exist_ok=True)
     ds, topo = load(cfg, args.dataset)
     sim = EdgeSim(cfg, topo)

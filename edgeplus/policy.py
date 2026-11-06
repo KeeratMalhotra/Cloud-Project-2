@@ -80,6 +80,16 @@ class NumpyPolicy:
         self.nt, self.nc, self.ng = norms
         self._x = np.zeros((K_MAX, N_TASK + N_CAND), np.float32)
 
+    def greedy(self, sim):
+        """Best valid candidate under the policy (evaluation; no critic)."""
+        k = sim.o_n
+        x = self._x
+        x[:, :N_TASK] = self.nt(sim.o_task)
+        x[:, N_TASK:] = self.nc(sim.o_cand)
+        (w1, b1), (w2, b2), (w3, b3) = self.w
+        z = (np.tanh(np.tanh(x[:k] @ w1 + b1) @ w2 + b2) @ w3 + b3)[:, 0] + sim.o_bias[:k]
+        return int(np.argmax(np.where(sim.o_mask[:k], z, NEG)))
+
     def act(self, sim, rng=None, greedy=False):
         """Return (action, logp, value, task_n, cand_n, glob_n) for the pending decision."""
         k = sim.o_n

@@ -2,7 +2,17 @@ __pycache__/
 *.pyc
 .venv/
 data/
-runs/
-results/cache/
 *.part
 .ipynb_checkpoints/
+# keep trained policies, training logs and run configs; ignore console logs
+runs/*
+!runs/*/
+runs/*/*
+!runs/*/policy.pt
+!runs/*/log.csv
+!runs/*/config.json
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.bbl
+paper/*.blg
