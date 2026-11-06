@@ -1,4 +1,6 @@
-# Slack-aware server rules for EdgePlus
+# Energy-efficient priority scheduling for 6G edge task allocation
+
+Slack-aware server rules on top of EdgePlus.
 
 This repo reimplements **EdgePlus** (Taher et al., *IEEE Internet of Things Journal*, 2026; PDF in the repo
 root) and adds two rules that run on each edge server:
@@ -15,7 +17,8 @@ root) and adds two rules that run on each edge server:
 Both are fixed rules, so they are applied to the **same trained EdgePlus policy**: every comparison below uses
 identical policy weights and identical test episodes, and only the server rules change.
 
-The paper draft is in [`paper/`](paper/) and all numbers are in [`results/tables.md`](results/tables.md).
+The paper is in [`paper/`](paper/) (`main.pdf`, about 25 pages, written for readers new to the field) and all
+numbers are in [`results/tables.md`](results/tables.md).
 
 ## Main results
 
@@ -63,6 +66,7 @@ python -m edgeplus.evaluate --dataset delhi  --runs "runs/brasov_*" --episodes 1
        --variants baseline,edf_drop,guarded_dvfs,full
 python -m edgeplus.evaluate --dataset brasov --heuristic-loads 50000,100000,150000 --variants baseline,full
 python -m edgeplus.analyze                                # tables, statistics and figures in results/
+python -m edgeplus.figures                                # extra figures used in the paper
 ```
 
 The trained policies used in the paper are committed in `runs/*/policy.pt` (about 400 KB each), so the
@@ -94,7 +98,7 @@ sessions that stop after a few hours.
 Other modelling choices, all applied identically to the baseline and to our rules:
 - Servers are multi-core nodes (4 stationary nodes x 24 cores and 1 mobile node x 16 cores per cluster,
   plus a 32-core cloud with 2 s extra delay), simulated event by event. The core count was calibrated so that
-  a simple routing rule gives about 100% on time at 50k and about 80% at 150k, as in the paper.
+  the trained EdgePlus model lands close to the paper at 150k (80.5% vs 82.0% on time) and at 100% on time at 50k.
 - Each reading becomes one task; an episode takes N consecutive readings and compresses their real time span
   into 600 s. Training uses the first 70% of Brasov's days, testing the rest.
 - The mask estimates the wait from the server's real backlog instead of the paper's Kingman formula.
@@ -123,8 +127,9 @@ edgeplus/train.py        PPO training (resumable)
 edgeplus/evaluate.py     run frozen policies under each rule variant
 edgeplus/analyze.py      tables, confidence intervals, paired tests, figures
 edgeplus/calibrate.py    simulator check with a routing heuristic
+edgeplus/figures.py      explanatory figures for the paper (topologies, workload, examples, detailed results)
 scripts/train_all.sh     train all loads and seeds
 runs/                    trained policies and training logs
 results/                 evaluation CSVs, tables.md, figures
-paper/                   paper draft (IEEE conference format)
+paper/                   paper source (main.tex), figures and compiled main.pdf
 ```
