@@ -1,0 +1,7 @@
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
+matplotlib>=3.8
+# CPU-only PyTorch is enough (the policy is a small MLP):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
