@@ -27,6 +27,11 @@
 \usepackage{tabularx}%
 %%%%
 
+%% Widen the text column: the template's default single-column body text
+%% (31pc ~ 131mm) leaves large, centred margins on A4. Reclaim the unused
+%% marginpar allowance and trim the side margins so the text block is broader.
+\geometry{left=20mm,right=20mm,marginparwidth=0pt,marginparsep=0pt}
+
 \newcolumntype{L}{>{\raggedright\arraybackslash}X}
 
 %% Unnumbered, titled text blocks for the worked examples and the plain-language box,
