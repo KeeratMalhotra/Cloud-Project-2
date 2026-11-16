@@ -1,13 +1,19 @@
-%Version 3.1 December 2024
-% Springer Nature journal article template (sn-jnl), see sn-article.tex and user-manual.pdf
-% in the template package. Compile with pdfLaTeX + BibTeX:
+% Energy-Efficient Priority Scheduling for Task Allocation in 6G Edge Computing
+% Plain LaTeX build (no journal template). Compile with pdfLaTeX + BibTeX:
 %   pdflatex main && bibtex main && pdflatex main && pdflatex main
-%
-%%\documentclass[referee,pdflatex,sn-mathphys-num]{sn-jnl}% double line spacing for peer review
-%%\documentclass[lineno,pdflatex,sn-mathphys-num]{sn-jnl}% line numbers in the margin
-\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}% Math and Physical Sciences Numbered Reference Style
+% (also builds with `tectonic main.tex`)
+\documentclass[11pt]{article}
 
-%%%% Standard Packages
+%%%% Page geometry: one broad column, no oversized top/bottom margins %%%%
+\usepackage[a4paper,left=22mm,right=22mm,top=25mm,bottom=25mm]{geometry}
+\raggedbottom
+
+%%%% Typography %%%%
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+%%%% Standard packages (unchanged from the previous build) %%%%
 \usepackage{graphicx}%
 \usepackage{multirow}%
 \usepackage{amsmath,amssymb,amsfonts}%
@@ -22,43 +28,62 @@
 \usepackage{algorithmicx}%
 \usepackage{algpseudocode}%
 \usepackage{listings}%
-%%%% Additional packages
+%%%% Additional packages %%%%
 \usepackage{array}%
 \usepackage{tabularx}%
+\usepackage{enumitem}%
+\usepackage{framed}%
+\usepackage{float}%
+\usepackage[labelfont=bf,font=small,skip=6pt]{caption}%
+\usepackage[numbers,sort&compress]{natbib}%
 %%%%
-
-%% Widen the text column: the template's default single-column body text
-%% (31pc ~ 131mm) leaves large, centred margins on A4. Reclaim the unused
-%% marginpar allowance and trim the side margins so the text block is broader.
-\geometry{left=20mm,right=20mm,marginparwidth=0pt,marginparsep=0pt}
 
 \newcolumntype{L}{>{\raggedright\arraybackslash}X}
 
-%% Unnumbered, titled text blocks for the worked examples and the plain-language box,
-%% set with the template's definition style (bold head, roman text).
-\theoremstyle{thmstylethree}%
-\newcommand{\textblockname}{}%
-\newtheorem*{textblock*}{\textblockname}%
-\newenvironment{workedexample}[1]{\renewcommand{\textblockname}{Worked example #1}\begin{textblock*}}{\end{textblock*}}%
-\newenvironment{plainwords}{\renewcommand{\textblockname}{In simple words}\begin{textblock*}}{\end{textblock*}}%
+%% \botrule was the journal class's name for a table's closing rule;
+%% booktabs already provides the same thing as \bottomrule.
+\newcommand{\botrule}{\bottomrule}
 
-\raggedbottom
+%% One accent colour, used for links and for the callout boxes below.
+\definecolor{accent}{RGB}{31,81,120}
+\usepackage[colorlinks=true,linkcolor=accent,citecolor=accent,urlcolor=accent]{hyperref}
+
+%% Compact, consistent spacing for the many itemised/numbered lists in the paper.
+\setlist{itemsep=2pt,topsep=4pt,parsep=0pt}
+
+%% Boxed, left-ruled callouts for the worked examples and the plain-language asides
+%% (bold head, roman text).
+\theoremstyle{definition}
+\newcommand{\textblockname}{}
+\newtheorem*{textblock*}{\textblockname}
+\newenvironment{workedexample}[1]{%
+  \renewcommand{\textblockname}{Worked example #1}%
+  \def\FrameCommand{{\color{accent}\vrule width 2.25pt}\hspace{8pt}}%
+  \MakeFramed{\advance\hsize-10.25pt\FrameRestore}%
+  \begin{textblock*}}{\end{textblock*}%
+  \endMakeFramed}
+\newenvironment{plainwords}{%
+  \renewcommand{\textblockname}{In simple words}%
+  \def\FrameCommand{{\color{accent}\vrule width 2.25pt}\hspace{8pt}}%
+  \MakeFramed{\advance\hsize-10.25pt\FrameRestore}%
+  \begin{textblock*}}{\end{textblock*}%
+  \endMakeFramed}
 
 \begin{document}
 
-\title[Energy-Efficient Priority Scheduling for Task Allocation in 6G Edge Computing]{Energy-Efficient Priority Scheduling for Task Allocation in 6G Edge Computing}
-\subtitle{Deadline-aware queues and guarded CPU slow-down on top of the EdgePlus scheduler}
+\begin{center}
+{\LARGE\bfseries Energy-Efficient Priority Scheduling for Task Allocation in 6G Edge Computing}\\[8pt]
+{\Large Deadline-aware queues and guarded CPU slow-down on top of the EdgePlus scheduler}\\[16pt]
+{\large Keerat Malhotra$^{1,\ast}$, Bhavya Maheshwari$^{1}$ and Bhumika Aswal$^{1}$}\\[6pt]
+$^{1}$Netaji Subhas University of Technology, New Delhi, India\\[10pt]
+\small
+$^{\ast}$Corresponding author: \href{mailto:keeratjyot.singh.ug24@nsut.ac.in}{keeratjyot.singh.ug24@nsut.ac.in}\\
+Contributing authors: \href{mailto:bhavya.maheshwari.ug24@nsut.ac.in}{bhavya.maheshwari.ug24@nsut.ac.in}, \href{mailto:bhumika.aswal.ug24@nsut.ac.in}{bhumika.aswal.ug24@nsut.ac.in}
+\end{center}
 
-%% \author* marks the corresponding author
-\author*[1]{\fnm{Keerat} \sur{Malhotra}}\email{keeratjyot.singh.ug24@nsut.ac.in}
-
-\author[1]{\fnm{Bhavya} \sur{Maheshwari}}\email{bhavya.maheshwari.ug24@nsut.ac.in}
-
-\author[1]{\fnm{Bhumika} \sur{Aswal}}\email{bhumika.aswal.ug24@nsut.ac.in}
-
-\affil*[1]{\orgname{Netaji Subhas University of Technology}, \orgaddress{\city{New Delhi}, \country{India}}}
-
-\abstract{Edge computing places small servers close to the devices that use them, so that results come back
+\vspace{8pt}
+\begin{abstract}
+\noindent Edge computing places small servers close to the devices that use them, so that results come back
 quickly. In a 6G smart city these servers receive a constant stream of tasks from sensors, and the tasks have
 very different deadlines: an air-pollution alert may need an answer within seconds, while a logging job can wait
 ten minutes. EdgePlus, a recent scheduler published in the \emph{IEEE Internet of Things Journal}, uses
@@ -77,11 +102,12 @@ At the heaviest load we tested (150{,}000 tasks in ten minutes), the share of ta
 0.07\% on CityPulse. At light load, energy per task falls by 19.8\% while every task still finishes on time. The
 price is that relaxed tasks wait longer: the overall 95th-percentile latency at heavy load rises from 148\,s to
 298\,s on CityPulse, although those tasks still meet their own deadlines. The paper explains each idea from first
-principles, with worked examples, so that readers who are new to the field can follow it.}
+principles, with worked examples, so that readers who are new to the field can follow it.
+\end{abstract}
 
-\keywords{6G, edge computing, task allocation, priority scheduling, earliest deadline first, energy efficiency, DVFS, reinforcement learning}
+\noindent\textbf{Keywords:} 6G, edge computing, task allocation, priority scheduling, earliest deadline first, energy efficiency, DVFS, reinforcement learning
 
-\maketitle
+\vspace{8pt}
 
 %=====================================================================================================
 \section{Introduction}
@@ -1106,9 +1132,7 @@ energy per task by up to 19.8\% at light load. The price is a longer, but still 
 The experiments also show why each detail matters: deadline order works best together with dropping, deadlines
 make better priorities than fixed classes, and slowing down the CPU needs a guard.
 
-\backmatter
-
-\bmhead{Code and data availability}
+\paragraph{Code and data availability.}
 
 The simulator, the trained models, all raw results and the scripts that produce every table and figure in this
 paper are available in the project repository. CityPulse and AirDelhi are public datasets; AirDelhi is released
@@ -1132,7 +1156,7 @@ under the CC BY 4.0 licence.
 \section{All simulation parameters}
 \label{app:params}
 
-\begin{table}[!htbp]
+\begin{table}[H]
 \caption{Parameters of the simulator and of training. Values marked $^\dagger$ come from the EdgePlus paper.}
 \small
 \begin{tabularx}{\textwidth}{lL}
@@ -1166,6 +1190,7 @@ Tests & 3 training seeds $\times$ 10 test episodes per load; models run greedily
 
 \end{appendices}
 
-\bibliography{refs}% references are formatted by sn-mathphys-num.bst
+\bibliographystyle{unsrtnat}
+\bibliography{refs}
 
 \end{document}
