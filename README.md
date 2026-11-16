@@ -20,7 +20,7 @@ every server:
 Neither rule is learned, so both are applied to the **same trained EdgePlus policy**. Every comparison uses
 identical policy weights and identical test episodes; only the server rules change.
 
-- Paper: [`paper/main.pdf`](paper/main.pdf) (29 pages, written for readers new to the field), source in
+- Paper: [`paper/main.pdf`](paper/main.pdf) (24 pages, written for readers new to the field), source in
   [`paper/main.tex`](paper/main.tex)
 - All numbers with confidence intervals: [`results/tables.md`](results/tables.md)
 
@@ -135,9 +135,9 @@ All parameters live in [`configs/default.toml`](configs/default.toml); values ta
 
 ## Building the paper
 
-The paper uses the Springer Nature journal template (`sn-jnl`, version 3.1, December 2024; the original package
-is the `.zip` in the repository root). The class file `sn-jnl.cls` and the bibliography style
-`sn-mathphys-num.bst` (numbered references) are copied into `paper/`, so it builds without extra setup:
+The paper is a plain LaTeX `article` (no journal template): a single, broad text column, standard packages
+(`geometry`, `booktabs`, `algorithm`, `natbib`/`unsrtnat` for numbered references, `hyperref`, etc.), all of
+which ship with any standard TeX Live install, so it builds without bundling any extra class or style files:
 
 ```bash
 cd paper
@@ -145,23 +145,18 @@ pdflatex main && bibtex main && pdflatex main && pdflatex main
 ```
 
 **Overleaf:** download [`paper-overleaf.zip`](paper-overleaf.zip) from the repository root, then in Overleaf
-choose *New Project → Upload Project* and select the zip. It contains `main.tex`, `refs.bib`, `sn-jnl.cls`,
-`sn-mathphys-num.bst` and `figures/`, and compiles with Overleaf's default pdfLaTeX compiler. If you change files
-in `paper/`, rebuild the zip with:
+choose *New Project → Upload Project* and select the zip. It contains `main.tex`, `refs.bib` and `figures/`, and
+compiles with Overleaf's default pdfLaTeX compiler. If you change files in `paper/`, rebuild the zip with:
 
 ```bash
-cd paper && rm -f ../paper-overleaf.zip && zip -r ../paper-overleaf.zip main.tex refs.bib sn-jnl.cls sn-mathphys-num.bst figures
+cd paper && rm -f ../paper-overleaf.zip && zip -r ../paper-overleaf.zip main.tex refs.bib figures
 ```
 
-It also builds with `tectonic main.tex`. Useful class options in the first line of `main.tex`:
+It also builds with `tectonic main.tex`.
 
-- `referee`: double line spacing for peer review
-- `lineno`: line numbers in the margin
-- `sn-mathphys-num` can be swapped for another style from the template's `bst/` folder (for example
-  `sn-vancouver-num`) if the target journal asks for it; copy that `.bst` into `paper/` as well.
-
-Keerat Malhotra is marked as the corresponding author (`\author*`); move the `*` to change this. Before
-submission, fill in the Declarations block, which is left commented out at the end of `main.tex`.
+The corresponding author is marked with a `$^\ast$` in the title block; the three emails are near the top of
+`main.tex`. Before submission, add a Declarations section (Funding, Conflict of interest, Data availability,
+etc.), which most journals require but which this preprint build leaves out.
 
 ## What is implemented
 
@@ -218,8 +213,9 @@ edgeplus/
 scripts/train_all.sh     train all loads and seeds
 runs/                    trained policies, training logs and run configs
 results/                 evaluation CSVs, tables.md, summary.json, paired tests, figures
-paper/                   main.tex (sn-jnl template), refs.bib, figures/, compiled main.pdf
+paper/                   main.tex (plain article class), refs.bib, figures/, compiled main.pdf
 ```
 
 The repository root also holds the EdgePlus paper, a cited Journal of Cloud Computing article
-(`s13677-026-00857-x_*.pdf`) and the Springer Nature template package.
+(`s13677-026-00857-x_*.pdf`) and a Springer Nature template package kept for reference (the paper itself no
+longer uses it).
